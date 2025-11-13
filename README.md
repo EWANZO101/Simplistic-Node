@@ -20,15 +20,6 @@ Follow these steps to automatically install and deploy your project using the la
 
 #############################################
 ⚙️ Notes
-
-Make sure SECURE_COOKIES_FOR_IFRAME is set to true — this makes things easier for users and prevents iframe-related tickets.
-
-Always ensure you're using the latest versions of SnailyCAD dependencies.
-
-The .sh script includes notes and update checks to make sure everything matches the required versions.
-
-Thanks everyone! 👍
-
 🧠 What the Script Does & Doesn’t Do
 ✅ What It Does
 

@@ -116,7 +116,7 @@ log "PostgreSQL 16 is running."
 # =========================
 step "5" "Deploying Snaily-CADv4"
 
-read -p "Enter project directory (default: /home/snaily-cadv4): " PROJECT_DIR
+read -p "Enter project directory click enter if yes (default: /home/snaily-cadv4): " PROJECT_DIR
 PROJECT_DIR=${PROJECT_DIR:-/home/snaily-cadv4}
 
 if [[ ! -d "$PROJECT_DIR" ]]; then

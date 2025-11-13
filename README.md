@@ -9,13 +9,9 @@ Follow these steps to automatically install and deploy your project using the la
 - Internet connection  
 
 ### 🚀 Quick Start
-
 1. **Clone the repository**
    ```bash
    git clone https://github.com/EWANZO101/Simplistic-Node.git
    cd Simplistic-Node
-
-sudo chmod +x update_start.sh
-
-
-./update_start.sh
+   sudo chmod +x update_start.sh
+   ./update_start.sh

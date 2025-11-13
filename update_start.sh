@@ -56,6 +56,10 @@ self_fix() {
             curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
             sudo apt install -y nodejs
             ;;
+        "npm-fix")
+            sudo npm cache clean --force
+            sudo npm install -g npm@latest
+            ;;
         "pnpm-missing")
             sudo npm install -g pnpm@latest || curl -fsSL https://get.pnpm.io/install.sh | sh -
             ;;
@@ -106,13 +110,20 @@ install_prerequisites() {
     log "Installing base packages..."
     sudo apt install -y git curl wget gnupg lsb-release software-properties-common pwgen
     
-    # Node.js
+    # Node.js - Check and install only if needed
     if ! command -v node >/dev/null 2>&1; then
         log "Installing Node.js 22.x..."
         curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
         sudo apt install -y nodejs || self_fix "node-missing"
     else
-        log "Node.js already installed: $(node -v)"
+        CURRENT_NODE=$(node -v)
+        log "Node.js already installed: $CURRENT_NODE"
+        
+        # Check if we need to update npm separately
+        if npm list -g npm | grep -q "ERR"; then
+            warn "npm has issues, reinstalling..."
+            sudo npm install -g npm@latest
+        fi
     fi
     
     # npm update
@@ -339,7 +350,7 @@ log() { echo -e "${GREEN}[*]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 error_exit() { echo -e "${RED}[x]${NC} $1" >&2; exit 1; }
 
-export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$HOME/.local/bin:$PATH"
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$HOME/.local/bin:/usr/local/lib/nodejs/bin:$PATH"
 
 if [ -d "/usr/local/lib/nodejs" ]; then
     export PATH="/usr/local/lib/nodejs/bin:$PATH"
@@ -351,6 +362,7 @@ fi
 
 log "Environment Information:"
 log "Node: $(command -v node || echo 'NOT FOUND')"
+log "npm: $(npm --version || echo 'NOT FOUND')"
 log "pnpm: $(command -v pnpm || echo 'NOT FOUND')"
 log "git: $(command -v git || echo 'NOT FOUND')"
 
@@ -415,9 +427,20 @@ setup_systemd() {
         create_start_script
     fi
     
-    # Find binary paths
-    NODE_PATH=$(command -v node)
-    PNPM_PATH=$(command -v pnpm)
+    # Find binary paths more reliably
+    NODE_PATH=$(which node)
+    PNPM_PATH=$(which pnpm)
+    NPM_PATH=$(which npm)
+    
+    # Create a comprehensive PATH
+    FULL_PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin"
+    if [[ -n "$NODE_PATH" ]]; then
+        FULL_PATH="${FULL_PATH}:${NODE_PATH%/*}"
+    fi
+    if [[ -n "$PNPM_PATH" ]]; then
+        FULL_PATH="${FULL_PATH}:${PNPM_PATH%/*}"
+    fi
+    FULL_PATH="${FULL_PATH}:/usr/local/lib/nodejs/bin:/opt/nodejs/bin"
     
     log "Creating systemd service file..."
     
@@ -436,7 +459,7 @@ User=root
 WorkingDirectory=${PROJECT_PATH}
 Restart=on-failure
 RestartSec=10
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:${NODE_PATH%/*}:${PNPM_PATH%/*}"
+Environment="PATH=${FULL_PATH}"
 Environment="NODE_ENV=production"
 Environment="HOME=/root"
 
@@ -460,6 +483,9 @@ EOFSERVICE
         if [[ "$EXIT_CODE" == "127" ]]; then
             warn "Exit code 127 - fixing PATH issues..."
             
+            # Create even more comprehensive PATH
+            COMPREHENSIVE_PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:/usr/local/lib/nodejs/bin:/opt/nodejs/bin:/snap/bin"
+            
             sudo bash -c "cat > $SERVICE_FILE" <<EOFSERVICE2
 [Unit]
 Description=Start Snaily CADv4
@@ -475,7 +501,7 @@ User=root
 WorkingDirectory=${PROJECT_PATH}
 Restart=on-failure
 RestartSec=10
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:${NODE_PATH%/*}:${PNPM_PATH%/*}:/usr/local/lib/nodejs/bin"
+Environment="PATH=${COMPREHENSIVE_PATH}"
 Environment="NODE_ENV=production"
 Environment="HOME=/root"
 
@@ -507,6 +533,7 @@ verify_installation() {
     # Check Node.js
     if command -v node >/dev/null 2>&1; then
         log "Node.js: $(node -v)"
+        log "npm: $(npm --version)"
     else
         error "Node.js NOT installed"
         ((ISSUES_FOUND++))
@@ -760,6 +787,12 @@ main() {
         exit 1
     fi
     
+    # Fix npm issues first if they exist
+    if npm list -g npm 2>&1 | grep -q "ERR"; then
+        warn "Detected npm issues, attempting fix..."
+        self_fix "npm-fix"
+    fi
+    
     while true; do
         show_menu
         
@@ -773,7 +806,34 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             3)
+                # Set default project path for verification
+                PROJECT_PATH="$DEFAULT_PROJECT_PATH"
                 verify_installation
                 read -p "Press Enter to continue..."
                 ;;
             4)
+                service_only
+                read -p "Press Enter to continue..."
+                ;;
+            5)
+                database_only
+                read -p "Press Enter to continue..."
+                ;;
+            6)
+                clean_install
+                read -p "Press Enter to continue..."
+                ;;
+            7)
+                log "Goodbye!"
+                exit 0
+                ;;
+            *)
+                warn "Invalid choice. Please enter a number between 1-7."
+                read -p "Press Enter to continue..."
+                ;;
+        esac
+    done
+}
+
+# Run the main function
+main "$@"

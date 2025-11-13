@@ -4,12 +4,18 @@
 - Ubuntu 22.04 or newer | Sudo privileges | Git installed | Internet connection
 
 ### Installation
-```bash
+# Clone the repository
 git clone https://github.com/EWANZO101/Simplistic-Node.git
+
+# Enter the directory
 cd Simplistic-Node
+
+# Make the update_start.sh file executable
 sudo chmod +x update_start.sh
+
+# Run the script
 ./update_start.sh
-```
+
 
 ### Service Management (Only after installed above )
 ```bash

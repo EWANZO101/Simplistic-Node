@@ -136,39 +136,114 @@ log "Building project..."
 pnpm run build || error "Build failed. Check logs."
 
 # =========================
-# 🔍 STEP 6 — Verify start.sh
+# 🔍 STEP 6 — Create start.sh
 # =========================
-step "6" "Checking for start.sh script"
+step "6" "Creating start.sh script"
 
 START_SCRIPT="${PROJECT_DIR}/start.sh"
 
-if [[ ! -f "$START_SCRIPT" ]]; then
-    warn "start.sh not found. Creating a default start script..."
-    
-    cat > "$START_SCRIPT" <<'EOF'
+log "Creating start.sh with full deployment logic..."
+
+cat > "$START_SCRIPT" <<'EOFSTART'
 #!/bin/bash
-# Default start script for Snaily CADv4
+set -e
+set -o pipefail
 
-cd "$(dirname "$0")"
+# Colors for better readability
+GREEN="\033[0;32m"
+RED="\033[0;31m"
+YELLOW="\033[1;33m"
+NC="\033[0m"
 
-echo "Starting Snaily CADv4..."
+# Function to print status messages
+log() {
+    echo -e "${GREEN}[*]${NC} $1"
+}
 
-# Start the application (adjust based on your project structure)
-pnpm start
+warn() {
+    echo -e "${YELLOW}[!]${NC} $1"
+}
 
-# Alternative if using pm2:
-# pm2 start ecosystem.config.js
+error_exit() {
+    echo -e "${RED}[x]${NC} $1" >&2
+    exit 1
+}
 
-# Alternative for direct execution:
-# node dist/index.js
-EOF
-    
-    log "Created default start.sh script"
+# Set up PATH to include common binary locations
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$HOME/.local/bin:$PATH"
+
+# Add Node.js and npm paths
+if [ -d "/usr/local/lib/nodejs" ]; then
+    export PATH="/usr/local/lib/nodejs/bin:$PATH"
 fi
+
+# Add pnpm path if installed globally
+if [ -d "$HOME/.local/share/pnpm" ]; then
+    export PATH="$HOME/.local/share/pnpm:$PATH"
+fi
+
+# Log environment for debugging
+log "Environment Information:"
+log "PATH: $PATH"
+log "Node: $(command -v node || echo 'NOT FOUND')"
+log "pnpm: $(command -v pnpm || echo 'NOT FOUND')"
+log "git: $(command -v git || echo 'NOT FOUND')"
+
+# Function to deploy the project
+deploy_project() {
+    log "Starting project deployment..."
+    
+    PROJECT_DIR="/home/snaily-cadv4"
+    
+    if [[ ! -d "$PROJECT_DIR" ]]; then
+        error_exit "Directory $PROJECT_DIR not found or inaccessible."
+    fi
+    
+    cd "$PROJECT_DIR" || error_exit "Failed to change directory to $PROJECT_DIR."
+    
+    # Ensure git and pnpm are available
+    command -v git >/dev/null 2>&1 || error_exit "git not found. Please install git."
+    command -v pnpm >/dev/null 2>&1 || error_exit "pnpm not found. Please install pnpm."
+    command -v node >/dev/null 2>&1 || error_exit "node not found. Please install Node.js."
+    
+    # Copy environment settings
+    log "Copying environment settings..."
+    if ! node scripts/copy-env.mjs --client --api; then
+        error_exit "Failed to copy environment settings."
+    fi
+    
+    # Git operations
+    log "Stashing any local changes..."
+    git stash save "pre-deploy-$(date +%F-%T)" >/dev/null 2>&1 || warn "No changes to stash."
+    
+    log "Fetching latest changes from origin/main..."
+    git fetch origin main || error_exit "Failed to fetch from git."
+    
+    log "Pulling latest changes..."
+    git reset --hard origin/main || error_exit "Failed to reset to latest commit."
+    
+    # Install dependencies
+    log "Installing dependencies with pnpm..."
+    pnpm install || error_exit "Failed to install dependencies."
+    
+    # Build the project
+    log "Building the project..."
+    pnpm run build || error_exit "Failed to build the project."
+    
+    # Start the project
+    log "Starting the project..."
+    pnpm run start || error_exit "Failed to start the project."
+    
+    log "✅ Deployment completed successfully."
+}
+
+# Execute deployment
+deploy_project
+EOFSTART
 
 # Make start.sh executable
 sudo chmod +x "$START_SCRIPT"
-log "start.sh is now executable"
+log "start.sh created and made executable"
 
 # =========================
 # ⚙️ STEP 7 — Service Setup
@@ -177,30 +252,34 @@ step "7" "Setting up systemd service"
 
 SERVICE_FILE="/etc/systemd/system/start-snaily-cadv4.service"
 
-sudo bash -c "cat > $SERVICE_FILE" <<EOF
+sudo bash -c "cat > $SERVICE_FILE" <<EOFSERVICE
 [Unit]
 Description=Start Snaily CADv4
-After=network.target
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple
-ExecStart=${START_SCRIPT}
+ExecStart=/bin/bash ${START_SCRIPT}
 StandardOutput=append:${PROJECT_DIR}/start.log
 StandardError=append:${PROJECT_DIR}/start.log
 User=root
 WorkingDirectory=${PROJECT_DIR}
 Restart=on-failure
 RestartSec=10
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin"
+Environment="NODE_ENV=production"
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOFSERVICE
 
 sudo systemctl daemon-reload
 sudo systemctl enable start-snaily-cadv4.service
 sudo systemctl restart start-snaily-cadv4.service
 
 log "Systemd service is active."
+sleep 3
 systemctl status start-snaily-cadv4.service --no-pager || warn "Service may need manual start."
 
 # =========================
@@ -217,12 +296,16 @@ ls -la "$PROJECT_DIR" | head -20
 
 if [[ -f "${PROJECT_DIR}/start.log" ]]; then
     log "Service log tail:"
-    sudo tail -n 10 "${PROJECT_DIR}/start.log"
+    sudo tail -n 20 "${PROJECT_DIR}/start.log"
 else
     warn "No log file yet. Wait a moment and check: tail -f ${PROJECT_DIR}/start.log"
 fi
 
 echo -e "\n${GREEN}✅ Installation and deployment complete!${NC}"
-echo -e "Use: ${YELLOW}sudo systemctl restart start-snaily-cadv4.service${NC} to restart the service."
-echo -e "Check logs with: ${YELLOW}tail -f ${PROJECT_DIR}/start.log${NC}"
-echo -e "Service status: ${YELLOW}sudo systemctl status start-snaily-cadv4.service${NC}"
+echo -e "\n${BLUE}Quick Reference Commands:${NC}"
+echo -e "  Restart service:  ${YELLOW}sudo systemctl restart start-snaily-cadv4.service${NC}"
+echo -e "  Stop service:     ${YELLOW}sudo systemctl stop start-snaily-cadv4.service${NC}"
+echo -e "  Service status:   ${YELLOW}sudo systemctl status start-snaily-cadv4.service${NC}"
+echo -e "  View logs:        ${YELLOW}tail -f ${PROJECT_DIR}/start.log${NC}"
+echo -e "  View last 50:     ${YELLOW}tail -n 50 ${PROJECT_DIR}/start.log${NC}"
+echo -e ""

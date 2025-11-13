@@ -136,15 +136,25 @@ log "Building project..."
 pnpm run build || error "Build failed. Check logs."
 
 # =========================
-# 🔍 STEP 6 — Create start.sh
+# 🔍 STEP 6 — Get or Create start.sh
 # =========================
-step "6" "Creating start.sh script"
+step "6" "Setting up start.sh script"
 
 START_SCRIPT="${PROJECT_DIR}/start.sh"
 
-log "Creating start.sh with full deployment logic..."
-
-cat > "$START_SCRIPT" <<'EOFSTART'
+# Check if start.sh already exists
+if [[ -f "$START_SCRIPT" ]]; then
+    log "start.sh already exists. Keeping existing file."
+else
+    log "start.sh not found. Downloading from GitHub..."
+    
+    # Try to download from GitHub
+    if curl -fsSL https://raw.githubusercontent.com/EWANZO101/Simplistic-Node/main/start.sh -o "$START_SCRIPT"; then
+        log "Successfully downloaded start.sh from GitHub"
+    else
+        warn "Failed to download from GitHub. Creating default start.sh..."
+        
+        cat > "$START_SCRIPT" <<'EOFSTART'
 #!/bin/bash
 set -e
 set -o pipefail

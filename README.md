@@ -11,7 +11,7 @@ sudo chmod +x update_start.sh
 ./update_start.sh
 ```
 
-### Service Management
+### Service Management (Only after installed above )
 ```bash
 # Start
 sudo systemctl start start-snaily-cadv4.service

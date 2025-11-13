@@ -250,10 +250,12 @@ deploy_project() {
 # Execute deployment
 deploy_project
 EOFSTART
+    fi
+fi
 
 # Make start.sh executable
 sudo chmod +x "$START_SCRIPT"
-log "start.sh created and made executable"
+log "start.sh is now executable"
 
 # =========================
 # ⚙️ STEP 7 — Service Setup
@@ -290,7 +292,68 @@ sudo systemctl restart start-snaily-cadv4.service
 
 log "Systemd service is active."
 sleep 3
-systemctl status start-snaily-cadv4.service --no-pager || warn "Service may need manual start."
+
+# Check if service started successfully
+if ! systemctl is-active --quiet start-snaily-cadv4.service; then
+    warn "Service failed to start. Attempting auto-fix..."
+    
+    # Get the exit code
+    EXIT_CODE=$(systemctl show start-snaily-cadv4.service -p ExecMainStatus --value)
+    
+    if [[ "$EXIT_CODE" == "127" ]]; then
+        warn "Exit code 127 detected - command not found issue"
+        warn "This usually means PATH is not set correctly in the service"
+        
+        # Find the actual paths
+        NODE_PATH=$(command -v node)
+        PNPM_PATH=$(command -v pnpm)
+        GIT_PATH=$(command -v git)
+        
+        log "Detected paths:"
+        log "  node: $NODE_PATH"
+        log "  pnpm: $PNPM_PATH"
+        log "  git: $GIT_PATH"
+        
+        # Update the service file with explicit paths
+        warn "Updating service file with explicit binary paths..."
+        
+        sudo bash -c "cat > $SERVICE_FILE" <<EOFSERVICE2
+[Unit]
+Description=Start Snaily CADv4
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash ${START_SCRIPT}
+StandardOutput=append:${PROJECT_DIR}/start.log
+StandardError=append:${PROJECT_DIR}/start.log
+User=root
+WorkingDirectory=${PROJECT_DIR}
+Restart=on-failure
+RestartSec=10
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:${NODE_PATH%/*}:${PNPM_PATH%/*}"
+Environment="NODE_ENV=production"
+Environment="HOME=/root"
+
+[Install]
+WantedBy=multi-user.target
+EOFSERVICE2
+        
+        sudo systemctl daemon-reload
+        sudo systemctl restart start-snaily-cadv4.service
+        sleep 3
+        
+        if systemctl is-active --quiet start-snaily-cadv4.service; then
+            log "✅ Auto-fix successful! Service is now running."
+        else
+            error "Auto-fix failed. Checking logs..."
+            sudo tail -n 30 "${PROJECT_DIR}/start.log"
+        fi
+    fi
+fi
+
+systemctl status start-snaily-cadv4.service --no-pager || warn "Service may need manual intervention."
 
 # =========================
 # 🧠 STEP 8 — Debug Info
@@ -306,7 +369,21 @@ ls -la "$PROJECT_DIR" | head -20
 
 if [[ -f "${PROJECT_DIR}/start.log" ]]; then
     log "Service log tail:"
-    sudo tail -n 20 "${PROJECT_DIR}/start.log"
+    sudo tail -n 30 "${PROJECT_DIR}/start.log"
+    
+    # Check for common errors in logs
+    if grep -q "command not found" "${PROJECT_DIR}/start.log"; then
+        warn "Detected 'command not found' errors in logs"
+        warn "Run: sudo ${0} to retry with auto-fix"
+    fi
+    
+    if grep -q "pnpm not found\|node not found\|git not found" "${PROJECT_DIR}/start.log"; then
+        warn "Missing required binaries detected in logs"
+        log "Verifying installations..."
+        log "  node: $(which node 2>/dev/null || echo 'NOT FOUND')"
+        log "  pnpm: $(which pnpm 2>/dev/null || echo 'NOT FOUND')"
+        log "  git: $(which git 2>/dev/null || echo 'NOT FOUND')"
+    fi
 else
     warn "No log file yet. Wait a moment and check: tail -f ${PROJECT_DIR}/start.log"
 fi
@@ -318,4 +395,14 @@ echo -e "  Stop service:     ${YELLOW}sudo systemctl stop start-snaily-cadv4.ser
 echo -e "  Service status:   ${YELLOW}sudo systemctl status start-snaily-cadv4.service${NC}"
 echo -e "  View logs:        ${YELLOW}tail -f ${PROJECT_DIR}/start.log${NC}"
 echo -e "  View last 50:     ${YELLOW}tail -n 50 ${PROJECT_DIR}/start.log${NC}"
+echo -e "  Manual check:     ${YELLOW}cd ${PROJECT_DIR} && bash start.sh${NC}"
 echo -e ""
+
+# Final service status check
+if systemctl is-active --quiet start-snaily-cadv4.service; then
+    echo -e "${GREEN}✅ Service is running successfully!${NC}"
+else
+    echo -e "${RED}⚠️  Service is not running. Check logs for details.${NC}"
+    echo -e "${YELLOW}Try running manually: cd ${PROJECT_DIR} && bash start.sh${NC}"
+    echo -e "${YELLOW}Or check service logs: journalctl -u start-snaily-cadv4.service -n 50${NC}"
+fi

@@ -1,408 +1,321 @@
 #!/bin/bash
 # ============================================================
-# 🧠 update_start.sh — Automated Installer + Deployment Script
+# 🔍 Double-Check Script for Snaily CADv4 Deployment
 # ============================================================
-# ✅ Notes:
-#  - Uses latest pnpm, Node.js 22.x (via Nodesource), and PostgreSQL 16.
-#  - Includes debug + self-healing (retries failed installs).
-#  - Safe for Ubuntu 22.04+.
-#  - Includes step-by-step confirmation prompts.
+# This script verifies the installation and diagnoses issues
 # ============================================================
 
 set -e
 set -o pipefail
 
-# =========================
-# 🎨 COLORS & LOG FUNCTIONS
-# =========================
+# Colors
 GREEN="\033[0;32m"
 RED="\033[0;31m"
 YELLOW="\033[1;33m"
 BLUE="\033[1;34m"
+CYAN="\033[0;36m"
 NC="\033[0m"
 
 log() { echo -e "${GREEN}[✔]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-error() { echo -e "${RED}[x]${NC} $1" >&2; }
-step() { echo -e "\n${BLUE}=== STEP $1: $2 ===${NC}\n"; }
+error() { echo -e "${RED}[✗]${NC} $1"; }
+info() { echo -e "${CYAN}[i]${NC} $1"; }
+section() { echo -e "\n${BLUE}=== $1 ===${NC}\n"; }
 
-# =========================
-# 🩺 SELF-HEAL FUNCTION
-# =========================
-self_fix() {
-    warn "Attempting self-repair for: $1"
-    case "$1" in
-        "apt-lock")
-            sudo rm -rf /var/lib/apt/lists/lock
-            sudo rm -rf /var/cache/apt/archives/lock
-            sudo rm -rf /var/lib/dpkg/lock*
-            sudo dpkg --configure -a
-            ;;
-        "update-failed")
-            sudo apt clean
-            sudo apt update -y || true
-            ;;
-        "node-missing")
-            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-            sudo apt install -y nodejs
-            ;;
-        "pnpm-missing")
-            sudo npm install -g pnpm@latest || curl -fsSL https://get.pnpm.io/install.sh | sh -
-            ;;
-        "postgres-missing")
-            sudo apt update -y
-            sudo apt install -y postgresql-16 postgresql-contrib
-            ;;
-        *)
-            warn "No fix method for $1"
-            ;;
-    esac
-}
+PROJECT_DIR="${1:-/home/snaily-cadv4}"
+ISSUES_FOUND=0
 
-# =========================
-# 🧩 STEP 1 — System Update
-# =========================
-step "1" "Updating system packages"
-if ! sudo apt update && sudo apt upgrade -y; then
-    self_fix "update-failed"
-fi
-log "System packages updated successfully."
+# ============================================================
+# SECTION 1: System Requirements
+# ============================================================
+section "1. Checking System Requirements"
 
-# =========================
-# 🟢 STEP 2 — Node.js Setup
-# =========================
-step "2" "Installing Node.js 22.x"
-if ! command -v node >/dev/null 2>&1; then
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    sudo apt install -y nodejs || self_fix "node-missing"
+# Node.js
+if command -v node >/dev/null 2>&1; then
+    NODE_VERSION=$(node -v)
+    log "Node.js installed: $NODE_VERSION"
+    info "  Path: $(which node)"
 else
-    log "Node.js already installed: $(node -v)"
+    error "Node.js NOT installed"
+    ((ISSUES_FOUND++))
 fi
 
-# Update npm
-sudo npm install -g npm@latest || self_fix "npm-missing"
-log "Node.js and npm are ready."
-
-# =========================
-# 🔵 STEP 3 — pnpm Install
-# =========================
-step "3" "Installing pnpm (latest)"
-if ! command -v pnpm >/dev/null 2>&1; then
-    sudo npm install -g pnpm@latest || self_fix "pnpm-missing"
+# npm
+if command -v npm >/dev/null 2>&1; then
+    NPM_VERSION=$(npm -v)
+    log "npm installed: $NPM_VERSION"
+    info "  Path: $(which npm)"
 else
-    log "pnpm already installed: $(pnpm -v)"
+    error "npm NOT installed"
+    ((ISSUES_FOUND++))
 fi
 
-# =========================
-# 🐘 STEP 4 — PostgreSQL 16
-# =========================
-step "4" "Installing PostgreSQL 16"
-if ! command -v psql >/dev/null 2>&1; then
-    sudo apt install -y wget gnupg lsb-release
-    RELEASE=$(lsb_release -cs)
-    echo "deb http://apt.postgresql.org/pub/repos/apt ${RELEASE}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
-    wget -qO - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
-    sudo apt update -y
-    sudo apt install -y postgresql-16 postgresql-contrib || self_fix "postgres-missing"
+# pnpm
+if command -v pnpm >/dev/null 2>&1; then
+    PNPM_VERSION=$(pnpm -v)
+    log "pnpm installed: $PNPM_VERSION"
+    info "  Path: $(which pnpm)"
 else
-    log "PostgreSQL already installed: $(psql --version)"
-fi
-sudo systemctl enable postgresql
-sudo systemctl start postgresql
-log "PostgreSQL 16 is running."
-
-# =========================
-# 🧰 STEP 5 — Deploy Project
-# =========================
-step "5" "Deploying Snaily-CADv4"
-
-read -p "Enter project directory (default: /home/snaily-cadv4): " PROJECT_DIR
-PROJECT_DIR=${PROJECT_DIR:-/home/snaily-cadv4}
-
-if [[ ! -d "$PROJECT_DIR" ]]; then
-    error "Project directory not found: $PROJECT_DIR"
-    exit 1
+    error "pnpm NOT installed"
+    ((ISSUES_FOUND++))
 fi
 
-cd "$PROJECT_DIR"
-
-log "Fetching latest code..."
-git fetch origin main && git reset --hard origin/main
-
-log "Installing dependencies..."
-pnpm install || { self_fix "pnpm-missing"; pnpm install; }
-
-log "Building project..."
-pnpm run build || error "Build failed. Check logs."
-
-# =========================
-# 🔍 STEP 6 — Get or Create start.sh
-# =========================
-step "6" "Setting up start.sh script"
-
-START_SCRIPT="${PROJECT_DIR}/start.sh"
-
-# Check if start.sh already exists
-if [[ -f "$START_SCRIPT" ]]; then
-    log "start.sh already exists. Keeping existing file."
+# git
+if command -v git >/dev/null 2>&1; then
+    GIT_VERSION=$(git --version)
+    log "git installed: $GIT_VERSION"
+    info "  Path: $(which git)"
 else
-    log "start.sh not found. Downloading from GitHub..."
+    error "git NOT installed"
+    ((ISSUES_FOUND++))
+fi
+
+# PostgreSQL
+if command -v psql >/dev/null 2>&1; then
+    PSQL_VERSION=$(psql --version)
+    log "PostgreSQL installed: $PSQL_VERSION"
+    info "  Path: $(which psql)"
     
-    # Try to download from GitHub
-    if curl -fsSL https://raw.githubusercontent.com/EWANZO101/Simplistic-Node/main/start.sh -o "$START_SCRIPT"; then
-        log "Successfully downloaded start.sh from GitHub"
+    if systemctl is-active --quiet postgresql; then
+        log "PostgreSQL service is running"
     else
-        warn "Failed to download from GitHub. Creating default start.sh..."
-        
-        cat > "$START_SCRIPT" <<'EOFSTART'
-#!/bin/bash
-set -e
-set -o pipefail
-
-# Colors for better readability
-GREEN="\033[0;32m"
-RED="\033[0;31m"
-YELLOW="\033[1;33m"
-NC="\033[0m"
-
-# Function to print status messages
-log() {
-    echo -e "${GREEN}[*]${NC} $1"
-}
-
-warn() {
-    echo -e "${YELLOW}[!]${NC} $1"
-}
-
-error_exit() {
-    echo -e "${RED}[x]${NC} $1" >&2
-    exit 1
-}
-
-# Set up PATH to include common binary locations
-export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$HOME/.local/bin:$PATH"
-
-# Add Node.js and npm paths
-if [ -d "/usr/local/lib/nodejs" ]; then
-    export PATH="/usr/local/lib/nodejs/bin:$PATH"
+        warn "PostgreSQL service is NOT running"
+        info "  Start with: sudo systemctl start postgresql"
+    fi
+else
+    error "PostgreSQL NOT installed"
+    ((ISSUES_FOUND++))
 fi
 
-# Add pnpm path if installed globally
-if [ -d "$HOME/.local/share/pnpm" ]; then
-    export PATH="$HOME/.local/share/pnpm:$PATH"
+# ============================================================
+# SECTION 2: Project Directory
+# ============================================================
+section "2. Checking Project Directory"
+
+if [[ -d "$PROJECT_DIR" ]]; then
+    log "Project directory exists: $PROJECT_DIR"
+    
+    # Check permissions
+    if [[ -r "$PROJECT_DIR" ]]; then
+        log "Directory is readable"
+    else
+        error "Directory is NOT readable"
+        ((ISSUES_FOUND++))
+    fi
+    
+    # List important files
+    info "Directory contents:"
+    ls -lah "$PROJECT_DIR" | head -15
+    
+    # Check for package.json
+    if [[ -f "$PROJECT_DIR/package.json" ]]; then
+        log "package.json found"
+    else
+        error "package.json NOT found"
+        ((ISSUES_FOUND++))
+    fi
+    
+    # Check for node_modules
+    if [[ -d "$PROJECT_DIR/node_modules" ]]; then
+        log "node_modules directory exists"
+    else
+        warn "node_modules NOT found - dependencies may not be installed"
+    fi
+    
+    # Check for .env files
+    if [[ -f "$PROJECT_DIR/.env" ]]; then
+        log ".env file found"
+    else
+        warn ".env file NOT found"
+    fi
+    
+else
+    error "Project directory NOT found: $PROJECT_DIR"
+    ((ISSUES_FOUND++))
 fi
 
-# Log environment for debugging
-log "Environment Information:"
-log "PATH: $PATH"
-log "Node: $(command -v node || echo 'NOT FOUND')"
-log "pnpm: $(command -v pnpm || echo 'NOT FOUND')"
-log "git: $(command -v git || echo 'NOT FOUND')"
+# ============================================================
+# SECTION 3: start.sh Script
+# ============================================================
+section "3. Checking start.sh Script"
 
-# Function to deploy the project
-deploy_project() {
-    log "Starting project deployment..."
-    
-    PROJECT_DIR="/home/snaily-cadv4"
-    
-    if [[ ! -d "$PROJECT_DIR" ]]; then
-        error_exit "Directory $PROJECT_DIR not found or inaccessible."
-    fi
-    
-    cd "$PROJECT_DIR" || error_exit "Failed to change directory to $PROJECT_DIR."
-    
-    # Ensure git and pnpm are available
-    command -v git >/dev/null 2>&1 || error_exit "git not found. Please install git."
-    command -v pnpm >/dev/null 2>&1 || error_exit "pnpm not found. Please install pnpm."
-    command -v node >/dev/null 2>&1 || error_exit "node not found. Please install Node.js."
-    
-    # Copy environment settings
-    log "Copying environment settings..."
-    if ! node scripts/copy-env.mjs --client --api; then
-        error_exit "Failed to copy environment settings."
-    fi
-    
-    # Git operations
-    log "Stashing any local changes..."
-    git stash save "pre-deploy-$(date +%F-%T)" >/dev/null 2>&1 || warn "No changes to stash."
-    
-    log "Fetching latest changes from origin/main..."
-    git fetch origin main || error_exit "Failed to fetch from git."
-    
-    log "Pulling latest changes..."
-    git reset --hard origin/main || error_exit "Failed to reset to latest commit."
-    
-    # Install dependencies
-    log "Installing dependencies with pnpm..."
-    pnpm install || error_exit "Failed to install dependencies."
-    
-    # Build the project
-    log "Building the project..."
-    pnpm run build || error_exit "Failed to build the project."
-    
-    # Start the project
-    log "Starting the project..."
-    pnpm run start || error_exit "Failed to start the project."
-    
-    log "✅ Deployment completed successfully."
-}
+START_SCRIPT="$PROJECT_DIR/start.sh"
 
-# Execute deployment
-deploy_project
-EOFSTART
+if [[ -f "$START_SCRIPT" ]]; then
+    log "start.sh exists"
+    
+    # Check if executable
+    if [[ -x "$START_SCRIPT" ]]; then
+        log "start.sh is executable"
+    else
+        error "start.sh is NOT executable"
+        info "  Fix with: sudo chmod +x $START_SCRIPT"
+        ((ISSUES_FOUND++))
     fi
+    
+    # Show first few lines
+    info "start.sh preview (first 10 lines):"
+    head -10 "$START_SCRIPT" | sed 's/^/    /'
+    
+    # Check for shebang
+    if head -1 "$START_SCRIPT" | grep -q "^#!"; then
+        log "Shebang found in start.sh"
+    else
+        warn "No shebang found in start.sh"
+    fi
+    
+else
+    error "start.sh NOT found at $START_SCRIPT"
+    ((ISSUES_FOUND++))
 fi
 
-# Make start.sh executable
-sudo chmod +x "$START_SCRIPT"
-log "start.sh is now executable"
-
-# =========================
-# ⚙️ STEP 7 — Service Setup
-# =========================
-step "7" "Setting up systemd service"
+# ============================================================
+# SECTION 4: Systemd Service
+# ============================================================
+section "4. Checking Systemd Service"
 
 SERVICE_FILE="/etc/systemd/system/start-snaily-cadv4.service"
 
-sudo bash -c "cat > $SERVICE_FILE" <<EOFSERVICE
-[Unit]
-Description=Start Snaily CADv4
-After=network.target postgresql.service
-Wants=postgresql.service
-
-[Service]
-Type=simple
-ExecStart=/bin/bash ${START_SCRIPT}
-StandardOutput=append:${PROJECT_DIR}/start.log
-StandardError=append:${PROJECT_DIR}/start.log
-User=root
-WorkingDirectory=${PROJECT_DIR}
-Restart=on-failure
-RestartSec=10
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin"
-Environment="NODE_ENV=production"
-
-[Install]
-WantedBy=multi-user.target
-EOFSERVICE
-
-sudo systemctl daemon-reload
-sudo systemctl enable start-snaily-cadv4.service
-sudo systemctl restart start-snaily-cadv4.service
-
-log "Systemd service is active."
-sleep 3
-
-# Check if service started successfully
-if ! systemctl is-active --quiet start-snaily-cadv4.service; then
-    warn "Service failed to start. Attempting auto-fix..."
+if [[ -f "$SERVICE_FILE" ]]; then
+    log "Service file exists: $SERVICE_FILE"
     
-    # Get the exit code
-    EXIT_CODE=$(systemctl show start-snaily-cadv4.service -p ExecMainStatus --value)
+    info "Service file content:"
+    cat "$SERVICE_FILE" | sed 's/^/    /'
     
-    if [[ "$EXIT_CODE" == "127" ]]; then
-        warn "Exit code 127 detected - command not found issue"
-        warn "This usually means PATH is not set correctly in the service"
-        
-        # Find the actual paths
-        NODE_PATH=$(command -v node)
-        PNPM_PATH=$(command -v pnpm)
-        GIT_PATH=$(command -v git)
-        
-        log "Detected paths:"
-        log "  node: $NODE_PATH"
-        log "  pnpm: $PNPM_PATH"
-        log "  git: $GIT_PATH"
-        
-        # Update the service file with explicit paths
-        warn "Updating service file with explicit binary paths..."
-        
-        sudo bash -c "cat > $SERVICE_FILE" <<EOFSERVICE2
-[Unit]
-Description=Start Snaily CADv4
-After=network.target postgresql.service
-Wants=postgresql.service
-
-[Service]
-Type=simple
-ExecStart=/bin/bash ${START_SCRIPT}
-StandardOutput=append:${PROJECT_DIR}/start.log
-StandardError=append:${PROJECT_DIR}/start.log
-User=root
-WorkingDirectory=${PROJECT_DIR}
-Restart=on-failure
-RestartSec=10
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:${NODE_PATH%/*}:${PNPM_PATH%/*}"
-Environment="NODE_ENV=production"
-Environment="HOME=/root"
-
-[Install]
-WantedBy=multi-user.target
-EOFSERVICE2
-        
-        sudo systemctl daemon-reload
-        sudo systemctl restart start-snaily-cadv4.service
-        sleep 3
-        
-        if systemctl is-active --quiet start-snaily-cadv4.service; then
-            log "✅ Auto-fix successful! Service is now running."
-        else
-            error "Auto-fix failed. Checking logs..."
-            sudo tail -n 30 "${PROJECT_DIR}/start.log"
-        fi
-    fi
-fi
-
-systemctl status start-snaily-cadv4.service --no-pager || warn "Service may need manual intervention."
-
-# =========================
-# 🧠 STEP 8 — Debug Info
-# =========================
-step "8" "Debugging and Verification"
-
-log "Node version: $(node -v)"
-log "npm version: $(npm -v)"
-log "pnpm version: $(pnpm -v)"
-log "PostgreSQL: $(psql --version)"
-log "Project directory contents:"
-ls -la "$PROJECT_DIR" | head -20
-
-if [[ -f "${PROJECT_DIR}/start.log" ]]; then
-    log "Service log tail:"
-    sudo tail -n 30 "${PROJECT_DIR}/start.log"
-    
-    # Check for common errors in logs
-    if grep -q "command not found" "${PROJECT_DIR}/start.log"; then
-        warn "Detected 'command not found' errors in logs"
-        warn "Run: sudo ${0} to retry with auto-fix"
+    # Check if enabled
+    if systemctl is-enabled --quiet start-snaily-cadv4.service 2>/dev/null; then
+        log "Service is enabled (will start on boot)"
+    else
+        warn "Service is NOT enabled"
+        info "  Enable with: sudo systemctl enable start-snaily-cadv4.service"
     fi
     
-    if grep -q "pnpm not found\|node not found\|git not found" "${PROJECT_DIR}/start.log"; then
-        warn "Missing required binaries detected in logs"
-        log "Verifying installations..."
-        log "  node: $(which node 2>/dev/null || echo 'NOT FOUND')"
-        log "  pnpm: $(which pnpm 2>/dev/null || echo 'NOT FOUND')"
-        log "  git: $(which git 2>/dev/null || echo 'NOT FOUND')"
+    # Check if active
+    if systemctl is-active --quiet start-snaily-cadv4.service; then
+        log "Service is RUNNING"
+    else
+        error "Service is NOT running"
+        ((ISSUES_FOUND++))
+        
+        # Get the status
+        info "Service status:"
+        systemctl status start-snaily-cadv4.service --no-pager -l | sed 's/^/    /'
     fi
+    
+    # Check for recent failures
+    FAILED_COUNT=$(systemctl show start-snaily-cadv4.service -p NRestarts --value)
+    if [[ "$FAILED_COUNT" -gt 0 ]]; then
+        warn "Service has failed and restarted $FAILED_COUNT times"
+    fi
+    
 else
-    warn "No log file yet. Wait a moment and check: tail -f ${PROJECT_DIR}/start.log"
+    error "Service file NOT found: $SERVICE_FILE"
+    ((ISSUES_FOUND++))
 fi
 
-echo -e "\n${GREEN}✅ Installation and deployment complete!${NC}"
-echo -e "\n${BLUE}Quick Reference Commands:${NC}"
-echo -e "  Restart service:  ${YELLOW}sudo systemctl restart start-snaily-cadv4.service${NC}"
-echo -e "  Stop service:     ${YELLOW}sudo systemctl stop start-snaily-cadv4.service${NC}"
-echo -e "  Service status:   ${YELLOW}sudo systemctl status start-snaily-cadv4.service${NC}"
-echo -e "  View logs:        ${YELLOW}tail -f ${PROJECT_DIR}/start.log${NC}"
-echo -e "  View last 50:     ${YELLOW}tail -n 50 ${PROJECT_DIR}/start.log${NC}"
-echo -e "  Manual check:     ${YELLOW}cd ${PROJECT_DIR} && bash start.sh${NC}"
+# ============================================================
+# SECTION 5: Logs Analysis
+# ============================================================
+section "5. Analyzing Logs"
+
+LOG_FILE="$PROJECT_DIR/start.log"
+
+if [[ -f "$LOG_FILE" ]]; then
+    log "Log file exists: $LOG_FILE"
+    
+    LOG_SIZE=$(du -h "$LOG_FILE" | cut -f1)
+    info "Log file size: $LOG_SIZE"
+    
+    info "Last 30 lines of log:"
+    tail -30 "$LOG_FILE" | sed 's/^/    /'
+    
+    # Check for common errors
+    echo ""
+    if grep -q "command not found" "$LOG_FILE" 2>/dev/null; then
+        error "Found 'command not found' errors in logs"
+        ((ISSUES_FOUND++))
+    fi
+    
+    if grep -q "pnpm not found\|node not found\|git not found" "$LOG_FILE" 2>/dev/null; then
+        error "Missing binary errors found in logs"
+        ((ISSUES_FOUND++))
+    fi
+    
+    if grep -q "error\|Error\|ERROR" "$LOG_FILE" 2>/dev/null; then
+        warn "Error messages found in logs"
+        info "Showing error lines:"
+        grep -i "error" "$LOG_FILE" | tail -5 | sed 's/^/    /'
+    fi
+    
+else
+    warn "Log file NOT found: $LOG_FILE"
+    info "Log file will be created when service starts"
+fi
+
+# Check systemd journal
+info "Recent systemd journal entries:"
+journalctl -u start-snaily-cadv4.service -n 10 --no-pager 2>/dev/null | sed 's/^/    /' || warn "Could not read journal"
+
+# ============================================================
+# SECTION 6: Environment & PATH
+# ============================================================
+section "6. Environment Check"
+
+info "Current PATH:"
+echo "    $PATH"
+
+info "PATH in service (from systemd):"
+systemctl show start-snaily-cadv4.service -p Environment --value | sed 's/^/    /' 2>/dev/null || warn "Could not read service environment"
+
+# Check what user the service runs as
+SERVICE_USER=$(systemctl show start-snaily-cadv4.service -p User --value 2>/dev/null)
+info "Service runs as user: ${SERVICE_USER:-unknown}"
+
+# ============================================================
+# SECTION 7: Port Check
+# ============================================================
+section "7. Network & Ports"
+
+# Check common ports
+for PORT in 3000 3001 5432 80 443; do
+    if ss -tuln | grep -q ":$PORT "; then
+        log "Port $PORT is in use"
+        info "  $(ss -tuln | grep ":$PORT " | head -1)"
+    else
+        info "Port $PORT is free"
+    fi
+done
+
+# ============================================================
+# SECTION 8: Summary & Recommendations
+# ============================================================
+section "8. Summary & Recommendations"
+
+if [[ $ISSUES_FOUND -eq 0 ]]; then
+    echo -e "${GREEN}✅ No critical issues found!${NC}"
+else
+    echo -e "${RED}⚠️  Found $ISSUES_FOUND issue(s) that need attention${NC}"
+fi
+
+echo -e "\n${BLUE}Quick Fix Commands:${NC}"
+echo -e "  ${YELLOW}# If service not running:${NC}"
+echo -e "    sudo systemctl restart start-snaily-cadv4.service"
+echo -e ""
+echo -e "  ${YELLOW}# If start.sh not executable:${NC}"
+echo -e "    sudo chmod +x $START_SCRIPT"
+echo -e ""
+echo -e "  ${YELLOW}# Test start.sh manually:${NC}"
+echo -e "    cd $PROJECT_DIR && bash start.sh"
+echo -e ""
+echo -e "  ${YELLOW}# View live logs:${NC}"
+echo -e "    tail -f $LOG_FILE"
+echo -e ""
+echo -e "  ${YELLOW}# View systemd journal:${NC}"
+echo -e "    journalctl -u start-snaily-cadv4.service -f"
+echo -e ""
+echo -e "  ${YELLOW}# Re-run installation:${NC}"
+echo -e "    sudo ./update_start.sh"
 echo -e ""
 
-# Final service status check
-if systemctl is-active --quiet start-snaily-cadv4.service; then
-    echo -e "${GREEN}✅ Service is running successfully!${NC}"
-else
-    echo -e "${RED}⚠️  Service is not running. Check logs for details.${NC}"
-    echo -e "${YELLOW}Try running manually: cd ${PROJECT_DIR} && bash start.sh${NC}"
-    echo -e "${YELLOW}Or check service logs: journalctl -u start-snaily-cadv4.service -n 50${NC}"
-fi
+# Exit with error code if issues found
+exit $ISSUES_FOUND

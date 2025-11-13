@@ -1,8 +1,11 @@
 #!/bin/bash
 # ============================================================
-# 🔍 Double-Check Script for Snaily CADv4 Deployment
+# 🚀 Complete Snaily CAD Installer
 # ============================================================
-# This script verifies the installation and diagnoses issues
+# This script handles the full installation process:
+# 1. Clone repository
+# 2. Install dependencies (requires restart)
+# 3. Setup PostgreSQL and .env (on second run)
 # ============================================================
 
 set -e
@@ -22,300 +25,331 @@ error() { echo -e "${RED}[✗]${NC} $1"; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 section() { echo -e "\n${BLUE}=== $1 ===${NC}\n"; }
 
-PROJECT_DIR="${1:-/home/snaily-cadv4}"
-ISSUES_FOUND=0
+# Configuration
+INSTALL_DIR="/home"
+PROJECT_NAME="snaily-cadv4"
+PROJECT_PATH="$INSTALL_DIR/$PROJECT_NAME"
+STATE_FILE="/tmp/snailycad_install_state"
+REPO_URL="https://github.com/SnailyCAD/snaily-cadv4.git"
 
 # ============================================================
-# SECTION 1: System Requirements
+# Check Installation State
 # ============================================================
-section "1. Checking System Requirements"
-
-# Node.js
-if command -v node >/dev/null 2>&1; then
-    NODE_VERSION=$(node -v)
-    log "Node.js installed: $NODE_VERSION"
-    info "  Path: $(which node)"
-else
-    error "Node.js NOT installed"
-    ((ISSUES_FOUND++))
-fi
-
-# npm
-if command -v npm >/dev/null 2>&1; then
-    NPM_VERSION=$(npm -v)
-    log "npm installed: $NPM_VERSION"
-    info "  Path: $(which npm)"
-else
-    error "npm NOT installed"
-    ((ISSUES_FOUND++))
-fi
-
-# pnpm
-if command -v pnpm >/dev/null 2>&1; then
-    PNPM_VERSION=$(pnpm -v)
-    log "pnpm installed: $PNPM_VERSION"
-    info "  Path: $(which pnpm)"
-else
-    error "pnpm NOT installed"
-    ((ISSUES_FOUND++))
-fi
-
-# git
-if command -v git >/dev/null 2>&1; then
-    GIT_VERSION=$(git --version)
-    log "git installed: $GIT_VERSION"
-    info "  Path: $(which git)"
-else
-    error "git NOT installed"
-    ((ISSUES_FOUND++))
-fi
-
-# PostgreSQL
-if command -v psql >/dev/null 2>&1; then
-    PSQL_VERSION=$(psql --version)
-    log "PostgreSQL installed: $PSQL_VERSION"
-    info "  Path: $(which psql)"
-    
-    if systemctl is-active --quiet postgresql; then
-        log "PostgreSQL service is running"
+check_state() {
+    if [[ -f "$STATE_FILE" ]]; then
+        INSTALL_STATE=$(cat "$STATE_FILE")
     else
-        warn "PostgreSQL service is NOT running"
-        info "  Start with: sudo systemctl start postgresql"
+        INSTALL_STATE="initial"
     fi
-else
-    error "PostgreSQL NOT installed"
-    ((ISSUES_FOUND++))
-fi
+}
+
+save_state() {
+    echo "$1" > "$STATE_FILE"
+}
 
 # ============================================================
-# SECTION 2: Project Directory
+# PHASE 1: Clone Repository & Install Dependencies
 # ============================================================
-section "2. Checking Project Directory"
-
-if [[ -d "$PROJECT_DIR" ]]; then
-    log "Project directory exists: $PROJECT_DIR"
+phase1_clone_and_install() {
+    section "Phase 1: Cloning Repository & Installing Dependencies"
     
-    # Check permissions
-    if [[ -r "$PROJECT_DIR" ]]; then
-        log "Directory is readable"
+    # Check if already cloned
+    if [[ -d "$PROJECT_PATH" ]]; then
+        warn "Project directory already exists: $PROJECT_PATH"
+        read -p "Do you want to remove it and re-clone? (y/n): " RECLONE
+        if [[ "$RECLONE" == "y" ]]; then
+            log "Removing existing directory..."
+            sudo rm -rf "$PROJECT_PATH"
+        else
+            log "Keeping existing directory, skipping clone..."
+        fi
+    fi
+    
+    # Clone repository if needed
+    if [[ ! -d "$PROJECT_PATH" ]]; then
+        log "Cloning Snaily CAD repository..."
+        cd "$INSTALL_DIR"
+        git clone "$REPO_URL" || {
+            error "Failed to clone repository"
+            exit 1
+        }
+        log "Repository cloned successfully"
+    fi
+    
+    # Navigate to project
+    cd "$PROJECT_PATH" || {
+        error "Failed to navigate to $PROJECT_PATH"
+        exit 1
+    }
+    
+    log "Current directory: $(pwd)"
+    
+    # Check for pnpm
+    if ! command -v pnpm >/dev/null 2>&1; then
+        error "pnpm is not installed!"
+        info "Please install pnpm first with: npm install -g pnpm"
+        exit 1
+    fi
+    
+    # Install dependencies
+    log "Installing dependencies with pnpm..."
+    log "This may take several minutes..."
+    
+    if pnpm install; then
+        log "✅ Dependencies installed successfully!"
     else
-        error "Directory is NOT readable"
-        ((ISSUES_FOUND++))
+        error "Failed to install dependencies"
+        exit 1
     fi
     
-    # List important files
-    info "Directory contents:"
-    ls -lah "$PROJECT_DIR" | head -15
+    # Save state and prompt for restart
+    save_state "phase1_complete"
     
-    # Check for package.json
-    if [[ -f "$PROJECT_DIR/package.json" ]]; then
-        log "package.json found"
-    else
-        error "package.json NOT found"
-        ((ISSUES_FOUND++))
-    fi
-    
-    # Check for node_modules
-    if [[ -d "$PROJECT_DIR/node_modules" ]]; then
-        log "node_modules directory exists"
-    else
-        warn "node_modules NOT found - dependencies may not be installed"
-    fi
-    
-    # Check for .env files
-    if [[ -f "$PROJECT_DIR/.env" ]]; then
-        log ".env file found"
-    else
-        warn ".env file NOT found"
-    fi
-    
-else
-    error "Project directory NOT found: $PROJECT_DIR"
-    ((ISSUES_FOUND++))
-fi
-
-# ============================================================
-# SECTION 3: start.sh Script
-# ============================================================
-section "3. Checking start.sh Script"
-
-START_SCRIPT="$PROJECT_DIR/start.sh"
-
-if [[ -f "$START_SCRIPT" ]]; then
-    log "start.sh exists"
-    
-    # Check if executable
-    if [[ -x "$START_SCRIPT" ]]; then
-        log "start.sh is executable"
-    else
-        error "start.sh is NOT executable"
-        info "  Fix with: sudo chmod +x $START_SCRIPT"
-        ((ISSUES_FOUND++))
-    fi
-    
-    # Show first few lines
-    info "start.sh preview (first 10 lines):"
-    head -10 "$START_SCRIPT" | sed 's/^/    /'
-    
-    # Check for shebang
-    if head -1 "$START_SCRIPT" | grep -q "^#!"; then
-        log "Shebang found in start.sh"
-    else
-        warn "No shebang found in start.sh"
-    fi
-    
-else
-    error "start.sh NOT found at $START_SCRIPT"
-    ((ISSUES_FOUND++))
-fi
-
-# ============================================================
-# SECTION 4: Systemd Service
-# ============================================================
-section "4. Checking Systemd Service"
-
-SERVICE_FILE="/etc/systemd/system/start-snaily-cadv4.service"
-
-if [[ -f "$SERVICE_FILE" ]]; then
-    log "Service file exists: $SERVICE_FILE"
-    
-    info "Service file content:"
-    cat "$SERVICE_FILE" | sed 's/^/    /'
-    
-    # Check if enabled
-    if systemctl is-enabled --quiet start-snaily-cadv4.service 2>/dev/null; then
-        log "Service is enabled (will start on boot)"
-    else
-        warn "Service is NOT enabled"
-        info "  Enable with: sudo systemctl enable start-snaily-cadv4.service"
-    fi
-    
-    # Check if active
-    if systemctl is-active --quiet start-snaily-cadv4.service; then
-        log "Service is RUNNING"
-    else
-        error "Service is NOT running"
-        ((ISSUES_FOUND++))
-        
-        # Get the status
-        info "Service status:"
-        systemctl status start-snaily-cadv4.service --no-pager -l | sed 's/^/    /'
-    fi
-    
-    # Check for recent failures
-    FAILED_COUNT=$(systemctl show start-snaily-cadv4.service -p NRestarts --value)
-    if [[ "$FAILED_COUNT" -gt 0 ]]; then
-        warn "Service has failed and restarted $FAILED_COUNT times"
-    fi
-    
-else
-    error "Service file NOT found: $SERVICE_FILE"
-    ((ISSUES_FOUND++))
-fi
-
-# ============================================================
-# SECTION 5: Logs Analysis
-# ============================================================
-section "5. Analyzing Logs"
-
-LOG_FILE="$PROJECT_DIR/start.log"
-
-if [[ -f "$LOG_FILE" ]]; then
-    log "Log file exists: $LOG_FILE"
-    
-    LOG_SIZE=$(du -h "$LOG_FILE" | cut -f1)
-    info "Log file size: $LOG_SIZE"
-    
-    info "Last 30 lines of log:"
-    tail -30 "$LOG_FILE" | sed 's/^/    /'
-    
-    # Check for common errors
     echo ""
-    if grep -q "command not found" "$LOG_FILE" 2>/dev/null; then
-        error "Found 'command not found' errors in logs"
-        ((ISSUES_FOUND++))
+    section "Phase 1 Complete!"
+    echo -e "${GREEN}✅ Repository cloned and dependencies installed${NC}"
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}📌 IMPORTANT: Please run this script again to continue${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "Run: ${GREEN}sudo ./complete-install.sh${NC}"
+    echo ""
+    exit 0
+}
+
+# ============================================================
+# PHASE 2: PostgreSQL Setup & .env Configuration
+# ============================================================
+phase2_database_setup() {
+    section "Phase 2: Database Setup & Configuration"
+    
+    log "Continuing installation from Phase 1..."
+    
+    if [[ ! -d "$PROJECT_PATH" ]]; then
+        error "Project directory not found: $PROJECT_PATH"
+        error "Please run Phase 1 first!"
+        exit 1
     fi
     
-    if grep -q "pnpm not found\|node not found\|git not found" "$LOG_FILE" 2>/dev/null; then
-        error "Missing binary errors found in logs"
-        ((ISSUES_FOUND++))
-    fi
+    cd "$PROJECT_PATH"
     
-    if grep -q "error\|Error\|ERROR" "$LOG_FILE" 2>/dev/null; then
-        warn "Error messages found in logs"
-        info "Showing error lines:"
-        grep -i "error" "$LOG_FILE" | tail -5 | sed 's/^/    /'
-    fi
-    
-else
-    warn "Log file NOT found: $LOG_FILE"
-    info "Log file will be created when service starts"
-fi
-
-# Check systemd journal
-info "Recent systemd journal entries:"
-journalctl -u start-snaily-cadv4.service -n 10 --no-pager 2>/dev/null | sed 's/^/    /' || warn "Could not read journal"
-
-# ============================================================
-# SECTION 6: Environment & PATH
-# ============================================================
-section "6. Environment Check"
-
-info "Current PATH:"
-echo "    $PATH"
-
-info "PATH in service (from systemd):"
-systemctl show start-snaily-cadv4.service -p Environment --value | sed 's/^/    /' 2>/dev/null || warn "Could not read service environment"
-
-# Check what user the service runs as
-SERVICE_USER=$(systemctl show start-snaily-cadv4.service -p User --value 2>/dev/null)
-info "Service runs as user: ${SERVICE_USER:-unknown}"
-
-# ============================================================
-# SECTION 7: Port Check
-# ============================================================
-section "7. Network & Ports"
-
-# Check common ports
-for PORT in 3000 3001 5432 80 443; do
-    if ss -tuln | grep -q ":$PORT "; then
-        log "Port $PORT is in use"
-        info "  $(ss -tuln | grep ":$PORT " | head -1)"
+    # Check if PostgreSQL is installed
+    if ! command -v psql >/dev/null 2>&1; then
+        log "PostgreSQL not found. Installing PostgreSQL 16..."
+        
+        sudo apt update -y
+        sudo apt install -y wget gnupg lsb-release software-properties-common pwgen
+        
+        RELEASE=$(lsb_release -cs)
+        echo "deb http://apt.postgresql.org/pub/repos/apt ${RELEASE}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+        wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo tee /etc/apt/trusted.gpg.d/postgresql.asc >/dev/null
+        
+        sudo apt update -y
+        sudo apt install -y postgresql-16 postgresql-contrib
+        
+        sudo systemctl enable postgresql
+        sudo systemctl start postgresql
+        
+        log "PostgreSQL 16 installed: $(psql --version)"
     else
-        info "Port $PORT is free"
+        log "PostgreSQL already installed: $(psql --version)"
+        
+        # Make sure pwgen is installed
+        if ! command -v pwgen >/dev/null 2>&1; then
+            log "Installing pwgen..."
+            sudo apt install -y pwgen
+        fi
     fi
-done
+    
+    echo ""
+    section "Generating Secure Credentials"
+    
+    DB_PASSWORD=$(pwgen -s 20 1)
+    JWT_SECRET=$(pwgen -s 32 1)
+    ENCRYPTION_TOKEN=$(pwgen -s 32 1)
+    
+    info "Generated POSTGRES_PASSWORD: $DB_PASSWORD"
+    info "Generated JWT_SECRET: $JWT_SECRET"
+    info "Generated ENCRYPTION_TOKEN: $ENCRYPTION_TOKEN"
+    
+    echo ""
+    section "Creating Database & User"
+    
+    DB_USER="snailycad"
+    DB_NAME="snaily-cadv4"
+    
+    # Check if user exists
+    if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
+        warn "User '$DB_USER' already exists, skipping user creation"
+    else
+        log "Creating database user..."
+        sudo -u postgres psql <<EOF
+CREATE USER "$DB_USER" WITH SUPERUSER PASSWORD '$DB_PASSWORD';
+EOF
+        log "User '$DB_USER' created"
+    fi
+    
+    # Check if database exists
+    if sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
+        warn "Database '$DB_NAME' already exists, skipping database creation"
+    else
+        log "Creating database..."
+        sudo -u postgres psql <<EOF
+CREATE DATABASE "$DB_NAME";
+GRANT ALL PRIVILEGES ON DATABASE "$DB_NAME" TO "$DB_USER";
+EOF
+        log "Database '$DB_NAME' created"
+    fi
+    
+    echo ""
+    section "Domain Configuration"
+    
+    read -p "Enter CAD domain (e.g., cad.example.com): " CAD_DOMAIN
+    read -p "Enter API domain (e.g., api.example.com): " API_DOMAIN
+    read -p "Enter ROOT domain (e.g., example.com): " ROOT_DOMAIN
+    
+    echo ""
+    section "Generating .env File"
+    
+    if [ ! -f ".env.example" ]; then
+        error ".env.example not found in $PROJECT_PATH"
+        exit 1
+    fi
+    
+    if [[ -f ".env" ]]; then
+        warn ".env file already exists"
+        read -p "Do you want to overwrite it? (y/n): " OVERWRITE
+        if [[ "$OVERWRITE" != "y" ]]; then
+            log "Keeping existing .env file"
+            save_state "complete"
+            phase2_complete_message
+            return
+        fi
+        mv .env .env.backup.$(date +%s)
+        log "Backed up existing .env file"
+    fi
+    
+    cp .env.example .env
+    
+    # Update .env with generated values
+    sed -i "s|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=\"$DB_PASSWORD\"|g" .env
+    sed -i "s|POSTGRES_USER=.*|POSTGRES_USER=\"$DB_USER\"|g" .env
+    sed -i "s|DB_HOST=.*|DB_HOST=\"localhost\"|g" .env
+    sed -i "s|DB_PORT=.*|DB_PORT=\"5432\"|g" .env
+    sed -i "s|POSTGRES_DB=.*|POSTGRES_DB=\"$DB_NAME\"|g" .env
+    sed -i "s|JWT_SECRET=.*|JWT_SECRET=\"$JWT_SECRET\"|g" .env
+    sed -i "s|ENCRYPTION_TOKEN=.*|ENCRYPTION_TOKEN=\"$ENCRYPTION_TOKEN\"|g" .env
+    sed -i "s|CORS_ORIGIN_URL=.*|CORS_ORIGIN_URL=\"https://$CAD_DOMAIN\"|g" .env
+    sed -i "s|NEXT_PUBLIC_CLIENT_URL=.*|NEXT_PUBLIC_CLIENT_URL=\"https://$CAD_DOMAIN\"|g" .env
+    sed -i "s|NEXT_PUBLIC_PROD_ORIGIN=.*|NEXT_PUBLIC_PROD_ORIGIN=\"https://$API_DOMAIN/v1\"|g" .env
+    sed -i "s|DOMAIN=.*|DOMAIN=\"$ROOT_DOMAIN\"|g" .env
+    sed -i "s|SECURE_COOKIES_FOR_IFRAME=.*|SECURE_COOKIES_FOR_IFRAME=\"true\"|g" .env
+    
+    log ".env file generated successfully!"
+    
+    echo ""
+    warn "Opening .env for review and final adjustments..."
+    sleep 2
+    nano .env
+    
+    # Mark as complete
+    save_state "complete"
+    
+    phase2_complete_message
+}
+
+phase2_complete_message() {
+    echo ""
+    section "Installation Complete! 🎉"
+    
+    echo -e "${GREEN}✅ Repository cloned${NC}"
+    echo -e "${GREEN}✅ Dependencies installed${NC}"
+    echo -e "${GREEN}✅ PostgreSQL configured${NC}"
+    echo -e "${GREEN}✅ Database created${NC}"
+    echo -e "${GREEN}✅ .env file generated${NC}"
+    echo ""
+    
+    echo -e "${BLUE}Next Steps:${NC}"
+    echo -e "  1. Review and test the installation:"
+    echo -e "     ${YELLOW}cd $PROJECT_PATH${NC}"
+    echo -e "     ${YELLOW}pnpm run build${NC}"
+    echo -e ""
+    echo -e "  2. Run the deployment script:"
+    echo -e "     ${YELLOW}sudo ./update_start.sh${NC}"
+    echo -e ""
+    echo -e "  3. Or verify everything with:"
+    echo -e "     ${YELLOW}sudo ./doublecheck.sh${NC}"
+    echo ""
+    
+    info "Project location: $PROJECT_PATH"
+    info "Database name: snaily-cadv4"
+    info "Database user: snailycad"
+    echo ""
+}
 
 # ============================================================
-# SECTION 8: Summary & Recommendations
+# Main Script Logic
 # ============================================================
-section "8. Summary & Recommendations"
 
-if [[ $ISSUES_FOUND -eq 0 ]]; then
-    echo -e "${GREEN}✅ No critical issues found!${NC}"
-else
-    echo -e "${RED}⚠️  Found $ISSUES_FOUND issue(s) that need attention${NC}"
-fi
+echo "============================================"
+echo " 🚀 SNAILYCAD COMPLETE INSTALLER"
+echo "============================================"
+echo ""
 
-echo -e "\n${BLUE}Quick Fix Commands:${NC}"
-echo -e "  ${YELLOW}# If service not running:${NC}"
-echo -e "    sudo systemctl restart start-snaily-cadv4.service"
-echo -e ""
-echo -e "  ${YELLOW}# If start.sh not executable:${NC}"
-echo -e "    sudo chmod +x $START_SCRIPT"
-echo -e ""
-echo -e "  ${YELLOW}# Test start.sh manually:${NC}"
-echo -e "    cd $PROJECT_DIR && bash start.sh"
-echo -e ""
-echo -e "  ${YELLOW}# View live logs:${NC}"
-echo -e "    tail -f $LOG_FILE"
-echo -e ""
-echo -e "  ${YELLOW}# View systemd journal:${NC}"
-echo -e "    journalctl -u start-snaily-cadv4.service -f"
-echo -e ""
-echo -e "  ${YELLOW}# Re-run installation:${NC}"
-echo -e "    sudo ./update_start.sh"
-echo -e ""
+# Check current state
+check_state
 
-# Exit with error code if issues found
-exit $ISSUES_FOUND
+case "$INSTALL_STATE" in
+    "initial")
+        log "Starting Phase 1: Clone & Install Dependencies"
+        phase1_clone_and_install
+        ;;
+    
+    "phase1_complete")
+        log "Phase 1 already complete"
+        log "Starting Phase 2: Database Setup & Configuration"
+        phase2_database_setup
+        ;;
+    
+    "complete")
+        log "Installation already complete!"
+        echo ""
+        warn "Do you want to:"
+        echo "  1. Re-run Phase 2 (Database & .env setup)"
+        echo "  2. Start fresh (remove everything and start over)"
+        echo "  3. Exit"
+        echo ""
+        read -p "Choose option (1/2/3): " CHOICE
+        
+        case "$CHOICE" in
+            1)
+                phase2_database_setup
+                ;;
+            2)
+                warn "This will delete $PROJECT_PATH and start over!"
+                read -p "Are you sure? (yes/no): " CONFIRM
+                if [[ "$CONFIRM" == "yes" ]]; then
+                    sudo rm -rf "$PROJECT_PATH"
+                    rm -f "$STATE_FILE"
+                    log "Cleaned up. Run the script again to start fresh."
+                else
+                    log "Cancelled"
+                fi
+                ;;
+            3)
+                log "Exiting..."
+                exit 0
+                ;;
+            *)
+                error "Invalid choice"
+                exit 1
+                ;;
+        esac
+        ;;
+    
+    *)
+        error "Unknown state: $INSTALL_STATE"
+        exit 1
+        ;;
+esac

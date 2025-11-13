@@ -1,5 +1,5 @@
 ## 🔧 Setup & Run
-
+## NOTE RUN AS ROOT USER 
 ### Prerequisites
 - Ubuntu 22.04 or newer | Sudo privileges | Git installed | Internet connection
 

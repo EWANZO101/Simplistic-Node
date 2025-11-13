@@ -50,6 +50,7 @@ install_nodejs_22() {
     sudo apt clean
     
     # Install Node.js 22.x
+    sudo apt update
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt install -y nodejs
     

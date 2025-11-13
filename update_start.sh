@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# 🚀 SNAILYCAD COMPLETE ALL-IN-ONE INSTALLER & MANAGER
+# üöÄ SNAILYCAD COMPLETE ALL-IN-ONE INSTALLER & MANAGER
 # ============================================================
 # This script handles everything:
 # - Full installation (clone, dependencies, PostgreSQL, .env)
@@ -13,7 +13,7 @@ set -e
 set -o pipefail
 
 # =========================
-# 🎨 COLORS & LOG FUNCTIONS
+# COLORS & LOG FUNCTIONS
 # =========================
 GREEN="\033[0;32m"
 RED="\033[0;31m"
@@ -22,23 +22,22 @@ BLUE="\033[1;34m"
 CYAN="\033[0;36m"
 NC="\033[0m"
 
-log() { echo -e "${GREEN}[✔]${NC} $1"; }
+log() { echo -e "${GREEN}[*]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-error() { echo -e "${RED}[✗]${NC} $1"; }
+error() { echo -e "${RED}[x]${NC} $1"; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 step() { echo -e "\n${BLUE}=== STEP $1: $2 ===${NC}\n"; }
-section() { echo -e "\n${BLUE}━━━ $1 ━━━${NC}\n"; }
+section() { echo -e "\n${BLUE}--- $1 ---${NC}\n"; }
 
 # =========================
-# 📋 CONFIGURATION
+# CONFIGURATION
 # =========================
-PROJECT_PATH="/home/snaily-cadv4"
+DEFAULT_PROJECT_PATH="/home/snaily-cadv4"
 REPO_URL="https://github.com/SnailyCAD/snaily-cadv4.git"
 SERVICE_NAME="start-snaily-cadv4"
-STATE_FILE="/tmp/snailycad_install_state"
 
 # =========================
-# 🩺 SELF-HEAL FUNCTION
+# SELF-HEAL FUNCTION
 # =========================
 self_fix() {
     warn "Attempting self-repair for: $1"
@@ -71,30 +70,30 @@ self_fix() {
 }
 
 # =========================
-# 🎯 MAIN MENU
+# MAIN MENU
 # =========================
 show_menu() {
     clear
     echo "============================================"
-    echo " 🚀 SNAILYCAD INSTALLER & MANAGER"
+    echo " SNAILYCAD INSTALLER & MANAGER"
     echo "============================================"
     echo ""
     echo "Choose an option:"
     echo ""
-    echo "  1. 🚀 Quick Install (Complete Auto-Install)"
-    echo "  2. 🔄 Update & Deploy Existing Installation"
-    echo "  3. 🔍 Verify Installation (Diagnostics)"
-    echo "  4. ⚙️  Setup Systemd Service"
-    echo "  5. 🗄️  Database Setup Only"
-    echo "  6. 🧹 Clean Install (Remove & Reinstall)"
-    echo "  7. ❌ Exit"
+    echo "  1. Quick Install (Complete Auto-Install)"
+    echo "  2. Update & Deploy Existing Installation"
+    echo "  3. Verify Installation (Diagnostics)"
+    echo "  4. Setup Systemd Service"
+    echo "  5. Database Setup Only"
+    echo "  6. Clean Install (Remove & Reinstall)"
+    echo "  7. Exit"
     echo ""
     read -p "Enter your choice (1-7): " CHOICE
     echo ""
 }
 
 # =========================
-# 📦 INSTALL PREREQUISITES
+# INSTALL PREREQUISITES
 # =========================
 install_prerequisites() {
     step "1" "Installing System Prerequisites"
@@ -131,7 +130,7 @@ install_prerequisites() {
 }
 
 # =========================
-# 🐘 INSTALL POSTGRESQL
+# INSTALL POSTGRESQL
 # =========================
 install_postgresql() {
     step "2" "Installing PostgreSQL 16"
@@ -154,7 +153,7 @@ install_postgresql() {
 }
 
 # =========================
-# 🗄️ SETUP DATABASE
+# SETUP DATABASE
 # =========================
 setup_database() {
     step "3" "Setting Up Database"
@@ -188,7 +187,7 @@ EOF
 }
 
 # =========================
-# 📂 CLONE REPOSITORY
+# CLONE REPOSITORY
 # =========================
 clone_repository() {
     step "4" "Cloning Repository"
@@ -215,7 +214,7 @@ clone_repository() {
 }
 
 # =========================
-# 📦 INSTALL DEPENDENCIES
+# INSTALL DEPENDENCIES
 # =========================
 install_dependencies() {
     step "5" "Installing Project Dependencies"
@@ -235,7 +234,7 @@ install_dependencies() {
 }
 
 # =========================
-# 📄 GENERATE ENV FILE
+# GENERATE ENV FILE
 # =========================
 generate_env() {
     step "6" "Generating .env Configuration"
@@ -290,7 +289,7 @@ generate_env() {
 }
 
 # =========================
-# 🔨 BUILD PROJECT
+# BUILD PROJECT
 # =========================
 build_project() {
     step "7" "Building Project"
@@ -308,7 +307,7 @@ build_project() {
 }
 
 # =========================
-# 📝 CREATE START SCRIPT
+# CREATE START SCRIPT
 # =========================
 create_start_script() {
     step "8" "Creating start.sh Script"
@@ -391,7 +390,7 @@ deploy_project() {
     log "Starting project..."
     pnpm run start || error_exit "Failed to start"
     
-    log "✅ Deployment completed successfully"
+    log "Deployment completed successfully"
 }
 
 deploy_project
@@ -403,7 +402,7 @@ EOFSTART
 }
 
 # =========================
-# ⚙️ SETUP SYSTEMD SERVICE
+# SETUP SYSTEMD SERVICE
 # =========================
 setup_systemd() {
     step "9" "Setting Up Systemd Service"
@@ -489,7 +488,7 @@ EOFSERVICE2
             sleep 3
             
             if systemctl is-active --quiet ${SERVICE_NAME}.service; then
-                log "✅ Auto-fix successful! Service is running"
+                log "Auto-fix successful! Service is running"
             fi
         fi
     fi
@@ -498,7 +497,7 @@ EOFSERVICE2
 }
 
 # =========================
-# 🔍 VERIFY INSTALLATION
+# VERIFY INSTALLATION
 # =========================
 verify_installation() {
     section "Running System Verification"
@@ -579,7 +578,7 @@ verify_installation() {
         fi
         
         if systemctl is-active --quiet ${SERVICE_NAME}.service; then
-            log "Service is RUNNING ✅"
+            log "Service is RUNNING"
         else
             error "Service NOT running"
             ((ISSUES_FOUND++))
@@ -601,14 +600,14 @@ verify_installation() {
     
     echo ""
     if [[ $ISSUES_FOUND -eq 0 ]]; then
-        echo -e "${GREEN}✅ No critical issues found! System is ready.${NC}"
+        echo -e "${GREEN}✔ No critical issues found! System is ready.${NC}"
     else
-        echo -e "${RED}⚠️  Found $ISSUES_FOUND issue(s) that need attention${NC}"
+        echo -e "${RED}✘ Found $ISSUES_FOUND issue(s) that need attention${NC}"
     fi
 }
 
 # =========================
-# 🚀 QUICK INSTALL
+# QUICK INSTALL
 # =========================
 quick_install() {
     section "QUICK INSTALL - Complete Setup"
@@ -616,6 +615,11 @@ quick_install() {
     install_prerequisites
     install_postgresql
     setup_database
+    
+    # Prompt for project directory with default
+    read -p "Enter project directory (default: $DEFAULT_PROJECT_PATH): " input_dir
+    PROJECT_PATH="${input_dir:-$DEFAULT_PROJECT_PATH}"
+    
     clone_repository
     install_dependencies
     generate_env
@@ -624,9 +628,9 @@ quick_install() {
     setup_systemd
     
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${GREEN}✅ INSTALLATION COMPLETE!${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=============================================="
+    echo -e "${GREEN}✔ INSTALLATION COMPLETE!${NC}"
+    echo "=============================================="
     echo ""
     verify_installation
     echo ""
@@ -641,16 +645,14 @@ quick_install() {
 }
 
 # =========================
-# 🔄 UPDATE & DEPLOY
+# UPDATE & DEPLOY
 # =========================
 update_deploy() {
     section "UPDATE & DEPLOY"
     
-    echo "Enter project directory path (press Enter for default: $PROJECT_PATH)"
+    echo "Enter project directory path (press Enter for default: $DEFAULT_PROJECT_PATH)"
     read -p "Path: " CUSTOM_PATH
-    if [[ -n "$CUSTOM_PATH" ]]; then
-        PROJECT_PATH="$CUSTOM_PATH"
-    fi
+    PROJECT_PATH="${CUSTOM_PATH:-$DEFAULT_PROJECT_PATH}"
     
     if [[ ! -d "$PROJECT_PATH" ]]; then
         error "Project directory not found: $PROJECT_PATH"
@@ -682,12 +684,12 @@ update_deploy() {
 }
 
 # =========================
-# 🧹 CLEAN INSTALL
+# CLEAN INSTALL
 # =========================
 clean_install() {
     section "CLEAN INSTALL - Remove & Reinstall"
     
-    warn "This will remove $PROJECT_PATH and all data!"
+    warn "This will remove $DEFAULT_PROJECT_PATH and all data!"
     read -p "Are you sure? Type 'yes' to confirm: " CONFIRM
     
     if [[ "$CONFIRM" != "yes" ]]; then
@@ -700,9 +702,9 @@ clean_install() {
         sudo systemctl stop ${SERVICE_NAME}.service
     fi
     
-    if [[ -d "$PROJECT_PATH" ]]; then
+    if [[ -d "$DEFAULT_PROJECT_PATH" ]]; then
         log "Removing project directory..."
-        sudo rm -rf "$PROJECT_PATH"
+        sudo rm -rf "$DEFAULT_PROJECT_PATH"
     fi
     
     log "Starting fresh installation..."
@@ -710,7 +712,7 @@ clean_install() {
 }
 
 # =========================
-# 🗄️ DATABASE SETUP ONLY
+# DATABASE SETUP ONLY
 # =========================
 database_only() {
     section "DATABASE SETUP ONLY"
@@ -728,10 +730,14 @@ database_only() {
 }
 
 # =========================
-# ⚙️ SERVICE SETUP ONLY
+# SERVICE SETUP ONLY
 # =========================
 service_only() {
     section "SYSTEMD SERVICE SETUP"
+    
+    # Prompt for project directory with default
+    read -p "Enter project directory (default: $DEFAULT_PROJECT_PATH): " input_dir
+    PROJECT_PATH="${input_dir:-$DEFAULT_PROJECT_PATH}"
     
     if [[ ! -d "$PROJECT_PATH" ]]; then
         error "Project directory not found: $PROJECT_PATH"
@@ -745,7 +751,7 @@ service_only() {
 }
 
 # =========================
-# 🎯 MAIN PROGRAM
+# MAIN PROGRAM
 # =========================
 main() {
     # Check if running as root
@@ -771,28 +777,3 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             4)
-                service_only
-                read -p "Press Enter to continue..."
-                ;;
-            5)
-                database_only
-                read -p "Press Enter to continue..."
-                ;;
-            6)
-                clean_install
-                read -p "Press Enter to continue..."
-                ;;
-            7)
-                log "Exiting..."
-                exit 0
-                ;;
-            *)
-                error "Invalid choice. Please select 1-7."
-                sleep 2
-                ;;
-        esac
-    done
-}
-
-# Run main program
-main

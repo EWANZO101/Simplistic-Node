@@ -116,11 +116,11 @@ log "PostgreSQL 16 is running."
 # =========================
 step "5" "Deploying Snaily-CADv4"
 
-read -p "Enter project directory click enter if yes (default: /home/snaily-cadv4): " PROJECT_DIR
+read -p "Enter project directory (default: /home/snaily-cadv4): " PROJECT_DIR
 PROJECT_DIR=${PROJECT_DIR:-/home/snaily-cadv4}
 
 if [[ ! -d "$PROJECT_DIR" ]]; then
-    error "Project directory not found."
+    error "Project directory not found: $PROJECT_DIR"
     exit 1
 fi
 
@@ -136,9 +136,44 @@ log "Building project..."
 pnpm run build || error "Build failed. Check logs."
 
 # =========================
-# ⚙️ STEP 6 — Service Setup
+# 🔍 STEP 6 — Verify start.sh
 # =========================
-step "6" "Setting up systemd service"
+step "6" "Checking for start.sh script"
+
+START_SCRIPT="${PROJECT_DIR}/start.sh"
+
+if [[ ! -f "$START_SCRIPT" ]]; then
+    warn "start.sh not found. Creating a default start script..."
+    
+    cat > "$START_SCRIPT" <<'EOF'
+#!/bin/bash
+# Default start script for Snaily CADv4
+
+cd "$(dirname "$0")"
+
+echo "Starting Snaily CADv4..."
+
+# Start the application (adjust based on your project structure)
+pnpm start
+
+# Alternative if using pm2:
+# pm2 start ecosystem.config.js
+
+# Alternative for direct execution:
+# node dist/index.js
+EOF
+    
+    log "Created default start.sh script"
+fi
+
+# Make start.sh executable
+sudo chmod +x "$START_SCRIPT"
+log "start.sh is now executable"
+
+# =========================
+# ⚙️ STEP 7 — Service Setup
+# =========================
+step "7" "Setting up systemd service"
 
 SERVICE_FILE="/etc/systemd/system/start-snaily-cadv4.service"
 
@@ -149,17 +184,18 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${PROJECT_DIR}/start.sh
+ExecStart=${START_SCRIPT}
 StandardOutput=append:${PROJECT_DIR}/start.log
 StandardError=append:${PROJECT_DIR}/start.log
 User=root
 WorkingDirectory=${PROJECT_DIR}
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-sudo chmod +x "${PROJECT_DIR}/start.sh"
 sudo systemctl daemon-reload
 sudo systemctl enable start-snaily-cadv4.service
 sudo systemctl restart start-snaily-cadv4.service
@@ -168,17 +204,25 @@ log "Systemd service is active."
 systemctl status start-snaily-cadv4.service --no-pager || warn "Service may need manual start."
 
 # =========================
-# 🧠 STEP 7 — Debug Info
+# 🧠 STEP 8 — Debug Info
 # =========================
-step "7" "Debugging and Verification"
+step "8" "Debugging and Verification"
 
 log "Node version: $(node -v)"
 log "npm version: $(npm -v)"
 log "pnpm version: $(pnpm -v)"
 log "PostgreSQL: $(psql --version)"
-log "Service log tail:"
-sudo tail -n 10 "${PROJECT_DIR}/start.log" || warn "No log file yet."
+log "Project directory contents:"
+ls -la "$PROJECT_DIR" | head -20
+
+if [[ -f "${PROJECT_DIR}/start.log" ]]; then
+    log "Service log tail:"
+    sudo tail -n 10 "${PROJECT_DIR}/start.log"
+else
+    warn "No log file yet. Wait a moment and check: tail -f ${PROJECT_DIR}/start.log"
+fi
 
 echo -e "\n${GREEN}✅ Installation and deployment complete!${NC}"
 echo -e "Use: ${YELLOW}sudo systemctl restart start-snaily-cadv4.service${NC} to restart the service."
 echo -e "Check logs with: ${YELLOW}tail -f ${PROJECT_DIR}/start.log${NC}"
+echo -e "Service status: ${YELLOW}sudo systemctl status start-snaily-cadv4.service${NC}"

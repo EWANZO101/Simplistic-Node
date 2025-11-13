@@ -34,7 +34,7 @@ sudo chmod +x update_start.sh
 3. Run the Update / Start Script
 ./update_start.sh
 
-
+################################################################################################################
 ⚙️ Service Management
 
 Once installed, you can manage the Simplistic-Node service using systemctl. Replace start-snaily-cadv4.service with your actual service name if different.
@@ -56,12 +56,12 @@ sudo systemctl status start-snaily-cadv4.service
 sudo systemctl stop start-snaily-cadv4.service
 
 
-
+################################################
 🛠 Troubleshooting
 
 Use these commands to monitor or debug the service:
 
-
+################################################
 # View the full log file
 cat /home/snaily-cadv4/start.log
 

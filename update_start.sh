@@ -1,12 +1,6 @@
 #!/bin/bash
 # ============================================================
-# üöÄ SNAILYCAD COMPLETE ALL-IN-ONE INSTALLER & MANAGER
-# ============================================================
-# This script handles everything:
-# - Full installation (clone, dependencies, PostgreSQL, .env)
-# - System updates and deployment
-# - Service setup with systemd
-# - Complete verification and diagnostics
+# SNAILYCAD COMPLETE ALL-IN-ONE INSTALLER & MANAGER - FIXED
 # ============================================================
 
 set -e
@@ -53,12 +47,14 @@ self_fix() {
             sudo apt update -y || true
             ;;
         "node-missing")
-            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-            sudo apt install -y nodejs
+            install_nodejs_22
             ;;
         "npm-fix")
             sudo npm cache clean --force
             sudo npm install -g npm@latest
+            ;;
+        "node-version-conflict")
+            fix_nodejs_conflict
             ;;
         "pnpm-missing")
             sudo npm install -g pnpm@latest || curl -fsSL https://get.pnpm.io/install.sh | sh -
@@ -74,12 +70,51 @@ self_fix() {
 }
 
 # =========================
+# NODE.JS INSTALLATION FUNCTIONS
+# =========================
+install_nodejs_22() {
+    log "Installing Node.js 22.x..."
+    
+    # Remove existing Node.js installations to avoid conflicts
+    warn "Removing existing Node.js installations to prevent conflicts..."
+    sudo apt remove --purge -y nodejs npm
+    sudo rm -rf /etc/apt/sources.list.d/nodesource.list
+    sudo rm -rf /usr/lib/node_modules
+    sudo rm -rf /usr/local/lib/node_modules
+    sudo rm -rf ~/.npm
+    
+    # Install Node.js 22.x
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt install -y nodejs
+    
+    # Verify installation
+    log "Node.js version: $(node -v)"
+    log "npm version: $(npm -v)"
+}
+
+fix_nodejs_conflict() {
+    warn "Fixing Node.js version conflicts..."
+    
+    # Remove all existing Node.js versions
+    sudo apt remove --purge -y nodejs npm
+    sudo rm -rf /etc/apt/sources.list.d/nodesource.list
+    sudo rm -rf /etc/apt/sources.list.d/nodistro.list
+    
+    # Clean up
+    sudo apt autoremove -y
+    sudo apt clean
+    
+    # Install fresh Node.js 22.x
+    install_nodejs_22
+}
+
+# =========================
 # MAIN MENU
 # =========================
 show_menu() {
     clear
     echo "============================================"
-    echo " SNAILYCAD INSTALLER & MANAGER"
+    echo " SNAILYCAD INSTALLER & MANAGER - FIXED"
     echo "============================================"
     echo ""
     echo "Choose an option:"
@@ -90,9 +125,10 @@ show_menu() {
     echo "  4. Setup Systemd Service"
     echo "  5. Database Setup Only"
     echo "  6. Clean Install (Remove & Reinstall)"
-    echo "  7. Exit"
+    echo "  7. Fix Node.js Version Conflict"
+    echo "  8. Exit"
     echo ""
-    read -p "Enter your choice (1-7): " CHOICE
+    read -p "Enter your choice (1-8): " CHOICE
     echo ""
 }
 
@@ -110,23 +146,32 @@ install_prerequisites() {
     log "Installing base packages..."
     sudo apt install -y git curl wget gnupg lsb-release software-properties-common pwgen
     
-    # Node.js - Check and install only if needed
-    if ! command -v node >/dev/null 2>&1; then
-        log "Installing Node.js 22.x..."
-        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-        sudo apt install -y nodejs || self_fix "node-missing"
-    else
+    # Check current Node.js status
+    if command -v node >/dev/null 2>&1; then
         CURRENT_NODE=$(node -v)
-        log "Node.js already installed: $CURRENT_NODE"
+        CURRENT_NPM=$(npm -v 2>/dev/null || echo "npm error")
+        log "Current Node.js: $CURRENT_NODE"
+        log "Current npm: $CURRENT_NPM"
         
-        # Check if we need to update npm separately
-        if npm list -g npm | grep -q "ERR"; then
-            warn "npm has issues, reinstalling..."
-            sudo npm install -g npm@latest
+        # Check if we have the right version (Node.js 22.x)
+        if [[ ! "$CURRENT_NODE" =~ v22\. ]]; then
+            warn "Wrong Node.js version detected. Installing Node.js 22.x..."
+            install_nodejs_22
+        else
+            log "Node.js 22.x already installed"
+            
+            # Fix npm if needed
+            if [[ "$CURRENT_NPM" == "npm error" ]]; then
+                self_fix "npm-fix"
+            fi
         fi
+    else
+        # No Node.js installed, install fresh
+        install_nodejs_22
     fi
     
-    # npm update
+    # Update npm to latest
+    log "Updating npm to latest version..."
     sudo npm install -g npm@latest
     
     # pnpm
@@ -361,9 +406,9 @@ if [ -d "$HOME/.local/share/pnpm" ]; then
 fi
 
 log "Environment Information:"
-log "Node: $(command -v node || echo 'NOT FOUND')"
-log "npm: $(npm --version || echo 'NOT FOUND')"
-log "pnpm: $(command -v pnpm || echo 'NOT FOUND')"
+log "Node: $(node -v)"
+log "npm: $(npm -v)"
+log "pnpm: $(command -v pnpm && pnpm -v || echo 'NOT FOUND')"
 log "git: $(command -v git || echo 'NOT FOUND')"
 
 deploy_project() {
@@ -430,7 +475,6 @@ setup_systemd() {
     # Find binary paths more reliably
     NODE_PATH=$(which node)
     PNPM_PATH=$(which pnpm)
-    NPM_PATH=$(which npm)
     
     # Create a comprehensive PATH
     FULL_PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin"
@@ -533,7 +577,13 @@ verify_installation() {
     # Check Node.js
     if command -v node >/dev/null 2>&1; then
         log "Node.js: $(node -v)"
-        log "npm: $(npm --version)"
+        log "npm: $(npm -v)"
+        
+        # Verify it's Node.js 22.x
+        if [[ ! "$(node -v)" =~ v22\. ]]; then
+            error "Wrong Node.js version! Expected 22.x but got $(node -v)"
+            ((ISSUES_FOUND++))
+        fi
     else
         error "Node.js NOT installed"
         ((ISSUES_FOUND++))
@@ -739,6 +789,29 @@ clean_install() {
 }
 
 # =========================
+# FIX NODE.JS CONFLICT
+# =========================
+fix_nodejs_conflict() {
+    section "FIXING NODE.JS VERSION CONFLICT"
+    
+    warn "This will remove all existing Node.js versions and install fresh Node.js 22.x"
+    read -p "Continue? (y/n): " CONFIRM
+    
+    if [[ "$CONFIRM" != "y" ]]; then
+        log "Cancelled"
+        return
+    fi
+    
+    self_fix "node-version-conflict"
+    
+    log "Node.js conflict fixed!"
+    echo ""
+    log "Current versions:"
+    log "Node.js: $(node -v)"
+    log "npm: $(npm -v)"
+}
+
+# =========================
 # DATABASE SETUP ONLY
 # =========================
 database_only() {
@@ -787,10 +860,13 @@ main() {
         exit 1
     fi
     
-    # Fix npm issues first if they exist
-    if npm list -g npm 2>&1 | grep -q "ERR"; then
-        warn "Detected npm issues, attempting fix..."
-        self_fix "npm-fix"
+    # Check for Node.js conflicts first
+    if command -v node >/dev/null 2>&1; then
+        CURRENT_NODE=$(node -v)
+        if [[ ! "$CURRENT_NODE" =~ v22\. ]]; then
+            warn "Detected Node.js version conflict: $CURRENT_NODE (expected 22.x)"
+            info "Use Option 7 to fix this automatically"
+        fi
     fi
     
     while true; do
@@ -824,11 +900,15 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             7)
+                fix_nodejs_conflict
+                read -p "Press Enter to continue..."
+                ;;
+            8)
                 log "Goodbye!"
                 exit 0
                 ;;
             *)
-                warn "Invalid choice. Please enter a number between 1-7."
+                warn "Invalid choice. Please enter a number between 1-8."
                 read -p "Press Enter to continue..."
                 ;;
         esac

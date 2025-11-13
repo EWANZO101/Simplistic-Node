@@ -31,6 +31,82 @@ REPO_URL="https://github.com/SnailyCAD/snaily-cadv4.git"
 SERVICE_NAME="start-snaily-cadv4"
 
 # =========================
+# NODE.JS INSTALLATION FUNCTIONS
+# =========================
+install_nodejs_22() {
+    log "Installing Node.js 22.x..."
+    
+    # Remove existing Node.js installations to avoid conflicts
+    warn "Removing existing Node.js installations to prevent conflicts..."
+    sudo apt remove --purge -y nodejs npm
+    sudo rm -rf /etc/apt/sources.list.d/nodesource.list
+    sudo rm -rf /etc/apt/sources.list.d/nodistro.list
+    sudo rm -rf /usr/lib/node_modules
+    sudo rm -rf /usr/local/lib/node_modules
+    sudo rm -rf ~/.npm
+    
+    # Clean up
+    sudo apt autoremove -y
+    sudo apt clean
+    
+    # Install Node.js 22.x
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt install -y nodejs
+    
+    # Verify installation
+    log "Node.js version: $(node -v)"
+    log "npm version: $(npm -v)"
+}
+
+fix_nodejs_conflict() {
+    section "FIXING NODE.JS VERSION CONFLICT"
+    
+    warn "This will remove all existing Node.js versions and install fresh Node.js 22.x"
+    read -p "Continue? (y/n): " CONFIRM
+    
+    if [[ "$CONFIRM" != "y" ]]; then
+        log "Cancelled"
+        return
+    fi
+    
+    log "Removing existing Node.js installations..."
+    
+    # Stop any running Node.js services
+    sudo systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
+    
+    # Remove all Node.js versions
+    sudo apt remove --purge -y nodejs npm
+    sudo rm -rf /etc/apt/sources.list.d/nodesource.list
+    sudo rm -rf /etc/apt/sources.list.d/nodistro.list
+    sudo rm -rf /usr/lib/node_modules
+    sudo rm -rf /usr/local/lib/node_modules
+    sudo rm -rf ~/.npm
+    sudo rm -rf ~/.nvm
+    sudo rm -rf /opt/nodejs
+    
+    # Clean up
+    sudo apt autoremove -y
+    sudo apt clean
+    
+    # Update package lists
+    sudo apt update
+    
+    # Install fresh Node.js 22.x
+    log "Installing Node.js 22.x..."
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt install -y nodejs
+    
+    # Update npm to latest
+    sudo npm install -g npm@latest
+    
+    log "Node.js conflict fixed!"
+    echo ""
+    log "Current versions:"
+    log "Node.js: $(node -v)"
+    log "npm: $(npm -v)"
+}
+
+# =========================
 # SELF-HEAL FUNCTION
 # =========================
 self_fix() {
@@ -67,45 +143,6 @@ self_fix() {
             warn "No fix method for $1"
             ;;
     esac
-}
-
-# =========================
-# NODE.JS INSTALLATION FUNCTIONS
-# =========================
-install_nodejs_22() {
-    log "Installing Node.js 22.x..."
-    
-    # Remove existing Node.js installations to avoid conflicts
-    warn "Removing existing Node.js installations to prevent conflicts..."
-    sudo apt remove --purge -y nodejs npm
-    sudo rm -rf /etc/apt/sources.list.d/nodesource.list
-    sudo rm -rf /usr/lib/node_modules
-    sudo rm -rf /usr/local/lib/node_modules
-    sudo rm -rf ~/.npm
-    
-    # Install Node.js 22.x
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    sudo apt install -y nodejs
-    
-    # Verify installation
-    log "Node.js version: $(node -v)"
-    log "npm version: $(npm -v)"
-}
-
-fix_nodejs_conflict() {
-    warn "Fixing Node.js version conflicts..."
-    
-    # Remove all existing Node.js versions
-    sudo apt remove --purge -y nodejs npm
-    sudo rm -rf /etc/apt/sources.list.d/nodesource.list
-    sudo rm -rf /etc/apt/sources.list.d/nodistro.list
-    
-    # Clean up
-    sudo apt autoremove -y
-    sudo apt clean
-    
-    # Install fresh Node.js 22.x
-    install_nodejs_22
 }
 
 # =========================
@@ -177,7 +214,7 @@ install_prerequisites() {
     # pnpm
     if ! command -v pnpm >/dev/null 2>&1; then
         log "Installing pnpm..."
-        sudo npm install -g pnpm@latest || self_fix "pnpm-missing"
+        sudo npm install -g pnpm@latest
     else
         log "pnpm already installed: $(pnpm -v)"
     fi
@@ -201,7 +238,7 @@ install_postgresql() {
     echo "deb http://apt.postgresql.org/pub/repos/apt ${RELEASE}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
     wget -qO - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
     sudo apt update -y
-    sudo apt install -y postgresql-16 postgresql-contrib || self_fix "postgres-missing"
+    sudo apt install -y postgresql-16 postgresql-contrib
     
     sudo systemctl enable postgresql
     sudo systemctl start postgresql
@@ -375,13 +412,7 @@ create_start_script() {
         return
     fi
     
-    log "Downloading start.sh from GitHub..."
-    if curl -fsSL https://raw.githubusercontent.com/EWANZO101/Simplistic-Node/main/start.sh -o "$START_SCRIPT"; then
-        log "Successfully downloaded start.sh"
-    else
-        warn "Failed to download. Creating default start.sh..."
-        
-        cat > "$START_SCRIPT" <<'EOFSTART'
+    cat > "$START_SCRIPT" <<'EOFSTART'
 #!/bin/bash
 set -e
 set -o pipefail
@@ -452,7 +483,6 @@ deploy_project() {
 
 deploy_project
 EOFSTART
-    fi
     
     sudo chmod +x "$START_SCRIPT"
     log "start.sh is executable"
@@ -472,19 +502,8 @@ setup_systemd() {
         create_start_script
     fi
     
-    # Find binary paths more reliably
-    NODE_PATH=$(which node)
-    PNPM_PATH=$(which pnpm)
-    
     # Create a comprehensive PATH
-    FULL_PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin"
-    if [[ -n "$NODE_PATH" ]]; then
-        FULL_PATH="${FULL_PATH}:${NODE_PATH%/*}"
-    fi
-    if [[ -n "$PNPM_PATH" ]]; then
-        FULL_PATH="${FULL_PATH}:${PNPM_PATH%/*}"
-    fi
-    FULL_PATH="${FULL_PATH}:/usr/local/lib/nodejs/bin:/opt/nodejs/bin"
+    FULL_PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:/usr/local/lib/nodejs/bin:/opt/nodejs/bin"
     
     log "Creating systemd service file..."
     
@@ -519,51 +538,12 @@ EOFSERVICE
     sleep 3
     
     # Check if service started
-    if ! systemctl is-active --quiet ${SERVICE_NAME}.service; then
-        warn "Service failed to start. Attempting auto-fix..."
-        
-        EXIT_CODE=$(systemctl show ${SERVICE_NAME}.service -p ExecMainStatus --value)
-        
-        if [[ "$EXIT_CODE" == "127" ]]; then
-            warn "Exit code 127 - fixing PATH issues..."
-            
-            # Create even more comprehensive PATH
-            COMPREHENSIVE_PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:/usr/local/lib/nodejs/bin:/opt/nodejs/bin:/snap/bin"
-            
-            sudo bash -c "cat > $SERVICE_FILE" <<EOFSERVICE2
-[Unit]
-Description=Start Snaily CADv4
-After=network.target postgresql.service
-Wants=postgresql.service
-
-[Service]
-Type=simple
-ExecStart=/bin/bash ${START_SCRIPT}
-StandardOutput=append:${PROJECT_PATH}/start.log
-StandardError=append:${PROJECT_PATH}/start.log
-User=root
-WorkingDirectory=${PROJECT_PATH}
-Restart=on-failure
-RestartSec=10
-Environment="PATH=${COMPREHENSIVE_PATH}"
-Environment="NODE_ENV=production"
-Environment="HOME=/root"
-
-[Install]
-WantedBy=multi-user.target
-EOFSERVICE2
-            
-            sudo systemctl daemon-reload
-            sudo systemctl restart ${SERVICE_NAME}.service
-            sleep 3
-            
-            if systemctl is-active --quiet ${SERVICE_NAME}.service; then
-                log "Auto-fix successful! Service is running"
-            fi
-        fi
+    if systemctl is-active --quiet ${SERVICE_NAME}.service; then
+        log "Service is running successfully"
+    else
+        warn "Service may need manual intervention"
+        systemctl status ${SERVICE_NAME}.service --no-pager -l | head -10
     fi
-    
-    systemctl status ${SERVICE_NAME}.service --no-pager || warn "Service may need manual intervention"
 }
 
 # =========================
@@ -660,19 +640,10 @@ verify_installation() {
             error "Service NOT running"
             ((ISSUES_FOUND++))
             info "Status:"
-            systemctl status ${SERVICE_NAME}.service --no-pager -l | head -20
+            systemctl status ${SERVICE_NAME}.service --no-pager -l | head -10
         fi
     else
         warn "Systemd service NOT configured"
-    fi
-    
-    # Check logs
-    if [[ -f "$PROJECT_PATH/start.log" ]]; then
-        log "Log file exists"
-        info "Last 10 lines:"
-        tail -10 "$PROJECT_PATH/start.log" | sed 's/^/    /'
-    else
-        warn "Log file NOT found yet"
     fi
     
     echo ""
@@ -789,29 +760,6 @@ clean_install() {
 }
 
 # =========================
-# FIX NODE.JS CONFLICT
-# =========================
-fix_nodejs_conflict() {
-    section "FIXING NODE.JS VERSION CONFLICT"
-    
-    warn "This will remove all existing Node.js versions and install fresh Node.js 22.x"
-    read -p "Continue? (y/n): " CONFIRM
-    
-    if [[ "$CONFIRM" != "y" ]]; then
-        log "Cancelled"
-        return
-    fi
-    
-    self_fix "node-version-conflict"
-    
-    log "Node.js conflict fixed!"
-    echo ""
-    log "Current versions:"
-    log "Node.js: $(node -v)"
-    log "npm: $(npm -v)"
-}
-
-# =========================
 # DATABASE SETUP ONLY
 # =========================
 database_only() {
@@ -858,15 +806,6 @@ main() {
     if [[ $EUID -ne 0 ]]; then
         error "This script must be run as root (use sudo)"
         exit 1
-    fi
-    
-    # Check for Node.js conflicts first
-    if command -v node >/dev/null 2>&1; then
-        CURRENT_NODE=$(node -v)
-        if [[ ! "$CURRENT_NODE" =~ v22\. ]]; then
-            warn "Detected Node.js version conflict: $CURRENT_NODE (expected 22.x)"
-            info "Use Option 7 to fix this automatically"
-        fi
     fi
     
     while true; do

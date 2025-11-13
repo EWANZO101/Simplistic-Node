@@ -735,10 +735,11 @@ update_deploy() {
 # =========================
 # CLEAN INSTALL
 # =========================
+# =========================
 clean_install() {
     section "CLEAN INSTALL - Remove & Reinstall"
     
-    warn "This will remove $DEFAULT_PROJECT_PATH and all data!"
+    warn "This will remove $DEFAULT_PROJECT_PATH, all data, and PostgreSQL database!"
     read -p "Are you sure? Type 'yes' to confirm: " CONFIRM
     
     if [[ "$CONFIRM" != "yes" ]]; then
@@ -746,14 +747,30 @@ clean_install() {
         return
     fi
     
+    # Stop the service if running
     if systemctl is-active --quiet ${SERVICE_NAME}.service; then
         log "Stopping service..."
         sudo systemctl stop ${SERVICE_NAME}.service
     fi
     
+    # Remove project directory
     if [[ -d "$DEFAULT_PROJECT_PATH" ]]; then
         log "Removing project directory..."
         sudo rm -rf "$DEFAULT_PROJECT_PATH"
+    fi
+
+    # Remove PostgreSQL database
+    if command -v psql >/dev/null 2>&1; then
+        read -p "Enter PostgreSQL database name to remove (or leave empty to skip): " DB_NAME
+        if [[ -n "$DB_NAME" ]]; then
+            log "Dropping PostgreSQL database $DB_NAME..."
+            sudo -u postgres psql -c "DROP DATABASE IF EXISTS \"$DB_NAME\";"
+            log "Database $DB_NAME removed."
+        else
+            log "Skipping PostgreSQL removal."
+        fi
+    else
+        log "PostgreSQL not installed, skipping."
     fi
     
     log "Starting fresh installation..."

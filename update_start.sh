@@ -374,7 +374,7 @@ setup_ssl() {
     
     # Ask for email
     echo ""
-    read -p "Enter your email address for SSL certificate notifications: " CERT_EMAIL
+    read -p "Enter Clients email address for SSL certificate notifications: " CERT_EMAIL
     
     if [[ -z "$CERT_EMAIL" ]]; then
         error "Email is required for SSL certificates"

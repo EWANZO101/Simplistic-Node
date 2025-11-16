@@ -382,15 +382,19 @@ setup_ssl() {
     fi
     
     log "Running Certbot for SSL certificates..."
+    log "Using email: $CERT_EMAIL"
     log "Agreeing to Terms of Service: YES"
-    log "Email sharing with EFF: NO (automatic)"
+    log "No email sharing with EFF (automatic)"
     
-    # Run certbot with automatic answers: Y for ToS, N for email sharing
-    echo -e "Y\nN" | sudo certbot --nginx \
+    # Run certbot with non-interactive flags
+    sudo certbot --nginx \
         -d "$CAD_DOMAIN" \
         -d "$API_DOMAIN" \
         --email "$CERT_EMAIL" \
-        --redirect || {
+        --agree-tos \
+        --no-eff-email \
+        --redirect \
+        --non-interactive || {
         warn "Certbot failed. You may need to run it manually:"
         info "sudo certbot --nginx"
         return 1

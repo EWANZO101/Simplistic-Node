@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# SNAILYCAD COMPLETE ALL-IN-ONE INSTALLER & MANAGER - FIXED
+# SNAILYCAD COMPLETE ALL-IN-ONE INSTALLER & MANAGER - WITH NGINX
 # ============================================================
 
 set -e
@@ -34,7 +34,7 @@ SERVICE_NAME="start-snaily-cadv4"
 # APT LOCK HANDLER
 # =========================
 wait_for_apt_lock() {
-    local max_wait=300  # Maximum 5 minutes
+    local max_wait=300
     local waited=0
     local check_interval=2
     
@@ -69,19 +69,12 @@ wait_for_apt_lock() {
 
 force_clear_apt_locks() {
     warn "Force clearing apt locks..."
-    
-    # Kill any hanging apt processes
     sudo killall apt apt-get dpkg 2>/dev/null || true
     sleep 2
-    
-    # Remove lock files
     sudo rm -rf /var/lib/apt/lists/lock
     sudo rm -rf /var/cache/apt/archives/lock
     sudo rm -rf /var/lib/dpkg/lock*
-    
-    # Fix any interrupted dpkg operations
     sudo dpkg --configure -a 2>/dev/null || true
-    
     log "apt locks cleared"
 }
 
@@ -91,9 +84,7 @@ safe_apt_install() {
     local retry=0
     
     while [ $retry -lt $max_retries ]; do
-        # Wait for lock to be released
         if wait_for_apt_lock; then
-            # Try installation
             if sudo apt install -y $packages; then
                 return 0
             fi
@@ -103,12 +94,9 @@ safe_apt_install() {
         
         if [ $retry -lt $max_retries ]; then
             warn "apt install failed (attempt $retry/$max_retries)"
-            
-            # On second retry, force clear locks
             if [ $retry -eq 2 ]; then
                 force_clear_apt_locks
             fi
-            
             sleep 5
         fi
     done
@@ -122,9 +110,7 @@ safe_apt_update() {
     local retry=0
     
     while [ $retry -lt $max_retries ]; do
-        # Wait for lock to be released
         if wait_for_apt_lock; then
-            # Try update
             if sudo apt update; then
                 return 0
             fi
@@ -134,12 +120,9 @@ safe_apt_update() {
         
         if [ $retry -lt $max_retries ]; then
             warn "apt update failed (attempt $retry/$max_retries)"
-            
-            # On second retry, force clear locks
             if [ $retry -eq 2 ]; then
                 force_clear_apt_locks
             fi
-            
             sleep 5
         fi
     done
@@ -153,8 +136,6 @@ safe_apt_update() {
 # =========================
 install_nodejs_22() {
     log "Installing Node.js 22.x..."
-    
-    # Remove existing Node.js installations to avoid conflicts
     warn "Removing existing Node.js installations to prevent conflicts..."
     sudo apt remove --purge -y nodejs npm
     sudo rm -rf /etc/apt/sources.list.d/nodesource.list
@@ -162,24 +143,17 @@ install_nodejs_22() {
     sudo rm -rf /usr/lib/node_modules
     sudo rm -rf /usr/local/lib/node_modules
     sudo rm -rf ~/.npm
-    
-    # Clean up
     sudo apt autoremove -y
     sudo apt clean
-    
-    # Install Node.js 22.x
     safe_apt_update
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     safe_apt_install nodejs
-    
-    # Verify installation
     log "Node.js version: $(node -v)"
     log "npm version: $(npm -v)"
 }
 
 fix_nodejs_conflict() {
     section "FIXING NODE.JS VERSION CONFLICT"
-    
     warn "This will remove all existing Node.js versions and install fresh Node.js 22.x"
     read -p "Continue? (y/n): " CONFIRM
     
@@ -189,11 +163,7 @@ fix_nodejs_conflict() {
     fi
     
     log "Removing existing Node.js installations..."
-    
-    # Stop any running Node.js services
     sudo systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
-    
-    # Remove all Node.js versions
     sudo apt remove --purge -y nodejs npm
     sudo rm -rf /etc/apt/sources.list.d/nodesource.list
     sudo rm -rf /etc/apt/sources.list.d/nodistro.list
@@ -202,22 +172,13 @@ fix_nodejs_conflict() {
     sudo rm -rf ~/.npm
     sudo rm -rf ~/.nvm
     sudo rm -rf /opt/nodejs
-    
-    # Clean up
     sudo apt autoremove -y
     sudo apt clean
-    
-    # Update package lists
     safe_apt_update
-    
-    # Install fresh Node.js 22.x
     log "Installing Node.js 22.x..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     safe_apt_install nodejs
-    
-    # Update npm to latest
     sudo npm install -g npm@latest
-    
     log "Node.js conflict fixed!"
     echo ""
     log "Current versions:"
@@ -262,12 +223,196 @@ self_fix() {
 }
 
 # =========================
+# NGINX CONFIGURATION
+# =========================
+install_nginx() {
+    step "10" "Installing & Configuring Nginx"
+    
+    if command -v nginx >/dev/null 2>&1; then
+        log "Nginx already installed: $(nginx -v 2>&1)"
+        
+        # Ensure it's running
+        if ! systemctl is-active --quiet nginx; then
+            log "Starting Nginx service..."
+            sudo systemctl enable nginx
+            sudo systemctl start nginx
+        fi
+    else
+        log "Installing Nginx..."
+        safe_apt_install nginx
+        sudo systemctl enable nginx
+        sudo systemctl start nginx
+    fi
+    
+    log "Nginx installed and running successfully"
+}
+
+configure_nginx() {
+    section "CONFIGURING NGINX REVERSE PROXY"
+    
+    if [[ -z "$CAD_DOMAIN" ]] || [[ -z "$API_DOMAIN" ]]; then
+        error "Domain variables not set. Please run full installation first."
+        return 1
+    fi
+    
+    log "Creating Nginx configuration for SnailyCAD..."
+    
+    # API Configuration
+    API_CONFIG="/etc/nginx/sites-available/snailycad-api"
+    sudo bash -c "cat > $API_CONFIG" <<EOFAPI
+server {
+    # API Server Configuration
+    server_name ${API_DOMAIN};
+    
+    location / {
+        proxy_pass http://localhost:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+    
+    # Security headers
+    add_header X-XSS-Protection          "1; mode=block" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header Referrer-Policy           "no-referrer" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-DNS-Prefetch-Control on;
+    add_header Cross-Origin-Resource-Policy "cross-origin";
+    
+    listen 80;
+}
+EOFAPI
+    
+    # Client Configuration
+    CLIENT_CONFIG="/etc/nginx/sites-available/snailycad-client"
+    sudo bash -c "cat > $CLIENT_CONFIG" <<EOFCLIENT
+server {
+    # Client Server Configuration
+    server_name ${CAD_DOMAIN};
+    
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+    }
+    
+    # Security headers
+    add_header X-XSS-Protection          "1; mode=block" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header Referrer-Policy           "no-referrer" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-DNS-Prefetch-Control on;
+    add_header Cross-Origin-Resource-Policy "same-site";
+    
+    listen 80;
+}
+EOFCLIENT
+    
+    # Enable sites
+    sudo ln -sf "$API_CONFIG" /etc/nginx/sites-enabled/snailycad-api 2>/dev/null || true
+    sudo ln -sf "$CLIENT_CONFIG" /etc/nginx/sites-enabled/snailycad-client 2>/dev/null || true
+    
+    # Remove default site if exists
+    sudo rm -f /etc/nginx/sites-enabled/default
+    
+    # Test configuration
+    log "Testing Nginx configuration..."
+    if sudo nginx -t; then
+        log "Nginx configuration is valid"
+        sudo systemctl reload nginx
+        log "Nginx reloaded successfully"
+    else
+        error "Nginx configuration test failed!"
+        return 1
+    fi
+    
+    echo ""
+    log "Nginx reverse proxy configured successfully!"
+    info "API domain: $API_DOMAIN (proxies to localhost:8080)"
+    info "Client domain: $CAD_DOMAIN (proxies to localhost:3000)"
+    echo ""
+    warn "Next steps:"
+    info "1. Point your DNS records to this server's IP"
+    info "2. Install SSL certificates with: sudo certbot --nginx"
+}
+
+setup_ssl() {
+    section "SETTING UP SSL WITH CERTBOT"
+    
+    if ! command -v certbot >/dev/null 2>&1; then
+        log "Installing Certbot..."
+        safe_apt_install certbot python3-certbot-nginx
+    else
+        log "Certbot already installed"
+    fi
+    
+    if [[ -z "$CAD_DOMAIN" ]] || [[ -z "$API_DOMAIN" ]]; then
+        warn "Domain variables not set. Please configure manually."
+        info "Run: sudo certbot --nginx"
+        return
+    fi
+    
+    echo ""
+    warn "Before continuing, ensure:"
+    info "1. DNS A records point to this server's IP:"
+    info "   - $CAD_DOMAIN"
+    info "   - $API_DOMAIN"
+    info "2. Ports 80 and 443 are open in your firewall"
+    echo ""
+    read -p "Have you configured DNS and firewall? (y/n): " DNS_READY
+    
+    if [[ "$DNS_READY" != "y" ]]; then
+        warn "Please configure DNS first, then run this option again"
+        return
+    fi
+    
+    # Ask for email
+    echo ""
+    read -p "Enter your email address for SSL certificate notifications: " CERT_EMAIL
+    
+    if [[ -z "$CERT_EMAIL" ]]; then
+        error "Email is required for SSL certificates"
+        return 1
+    fi
+    
+    log "Running Certbot for SSL certificates..."
+    log "Agreeing to Terms of Service: YES"
+    log "Email sharing with EFF: NO (automatic)"
+    
+    # Run certbot with automatic answers: Y for ToS, N for email sharing
+    echo -e "Y\nN" | sudo certbot --nginx \
+        -d "$CAD_DOMAIN" \
+        -d "$API_DOMAIN" \
+        --email "$CERT_EMAIL" \
+        --redirect || {
+        warn "Certbot failed. You may need to run it manually:"
+        info "sudo certbot --nginx"
+        return 1
+    }
+    
+    log "SSL certificates installed successfully!"
+    
+    # Setup auto-renewal
+    log "Setting up automatic renewal..."
+    sudo systemctl enable certbot.timer || true
+    sudo systemctl start certbot.timer || true
+    
+    info "SSL is now active on your domains!"
+}
+
+# =========================
 # MAIN MENU
 # =========================
 show_menu() {
     clear
     echo "============================================"
-    echo " SNAILYCAD INSTALLER & MANAGER - FIXED"
+    echo " SNAILYCAD INSTALLER & MANAGER - WITH NGINX"
     echo "============================================"
     echo ""
     echo "Choose an option:"
@@ -279,10 +424,30 @@ show_menu() {
     echo "  5. Database Setup Only"
     echo "  6. Clean Install (Remove & Reinstall)"
     echo "  7. Fix Node.js Version Conflict"
-    echo "  8. Exit"
+    echo "  8. Configure Nginx Reverse Proxy"
+    echo "  9. Setup SSL Certificates (Certbot)"
+    echo " 10. Exit"
     echo ""
-    read -p "Enter your choice (1-8): " CHOICE
+    read -p "Enter your choice (1-10): " CHOICE
     echo ""
+}
+
+# =========================
+# INSTALL NGINX & CERTBOT (AUTO)
+# =========================
+auto_install_nginx_certbot() {
+    log "Installing Nginx..."
+    safe_apt_update
+    safe_apt_install nginx
+    
+    log "Starting Nginx service..."
+    sudo systemctl enable nginx
+    sudo systemctl start nginx
+    
+    log "Installing Certbot and Nginx plugin..."
+    safe_apt_install certbot python3-certbot-nginx
+    
+    log "✓ Nginx and Certbot installed successfully!"
 }
 
 # =========================
@@ -302,35 +467,31 @@ install_prerequisites() {
     log "Installing base packages..."
     safe_apt_install git curl wget gnupg lsb-release software-properties-common pwgen
     
-    # Check current Node.js status
+    # Auto-install Nginx and Certbot
+    auto_install_nginx_certbot
+    
     if command -v node >/dev/null 2>&1; then
         CURRENT_NODE=$(node -v)
         CURRENT_NPM=$(npm -v 2>/dev/null || echo "npm error")
         log "Current Node.js: $CURRENT_NODE"
         log "Current npm: $CURRENT_NPM"
         
-        # Check if we have the right version (Node.js 22.x)
         if [[ ! "$CURRENT_NODE" =~ v22\. ]]; then
             warn "Wrong Node.js version detected. Installing Node.js 22.x..."
             install_nodejs_22
         else
             log "Node.js 22.x already installed"
-            
-            # Fix npm if needed
             if [[ "$CURRENT_NPM" == "npm error" ]]; then
                 self_fix "npm-fix"
             fi
         fi
     else
-        # No Node.js installed, install fresh
         install_nodejs_22
     fi
     
-    # Update npm to latest
     log "Updating npm to latest version..."
     sudo npm install -g npm@latest
     
-    # pnpm
     if ! command -v pnpm >/dev/null 2>&1; then
         log "Installing pnpm..."
         sudo npm install -g pnpm@latest
@@ -376,7 +537,6 @@ setup_database() {
     
     log "Generated secure database password"
     
-    # Create user and database
     sudo -u postgres psql <<EOF 2>/dev/null || log "User/Database may already exist"
 DO \$\$
 BEGIN
@@ -393,8 +553,6 @@ GRANT ALL PRIVILEGES ON DATABASE "$DB_NAME" TO "$DB_USER";
 EOF
     
     log "Database '$DB_NAME' and user '$DB_USER' ready"
-    
-    # Export for later use
     export DB_PASSWORD DB_USER DB_NAME
 }
 
@@ -458,14 +616,15 @@ generate_env() {
         exit 1
     fi
     
-    # Ask for domains
     echo ""
     read -p "Enter CAD domain (e.g., cad.example.com): " CAD_DOMAIN
     read -p "Enter API domain (e.g., api.example.com): " API_DOMAIN
     read -p "Enter ROOT domain (e.g., example.com): " ROOT_DOMAIN
     echo ""
     
-    # Generate secrets
+    # Export for nginx configuration
+    export CAD_DOMAIN API_DOMAIN ROOT_DOMAIN
+    
     JWT_SECRET=$(pwgen -s 32 1)
     ENCRYPTION_TOKEN=$(pwgen -s 32 1)
     
@@ -478,7 +637,6 @@ generate_env() {
     
     cp .env.example .env
     
-    # Update .env
     sed -i "s|POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=\"$DB_PASSWORD\"|g" .env
     sed -i "s|POSTGRES_USER=.*|POSTGRES_USER=\"$DB_USER\"|g" .env
     sed -i "s|DB_HOST=.*|DB_HOST=\"localhost\"|g" .env
@@ -616,12 +774,10 @@ setup_systemd() {
     SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
     START_SCRIPT="$PROJECT_PATH/start.sh"
     
-    # Ensure start.sh exists
     if [[ ! -f "$START_SCRIPT" ]]; then
         create_start_script
     fi
     
-    # Create a comprehensive PATH
     FULL_PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/root/.local/bin:/usr/local/lib/nodejs/bin:/opt/nodejs/bin"
     
     log "Creating systemd service file..."
@@ -656,7 +812,6 @@ EOFSERVICE
     log "Systemd service configured"
     sleep 3
     
-    # Check if service started
     if systemctl is-active --quiet ${SERVICE_NAME}.service; then
         log "Service is running successfully"
     else
@@ -673,12 +828,10 @@ verify_installation() {
     
     ISSUES_FOUND=0
     
-    # Check Node.js
     if command -v node >/dev/null 2>&1; then
         log "Node.js: $(node -v)"
         log "npm: $(npm -v)"
         
-        # Verify it's Node.js 22.x
         if [[ ! "$(node -v)" =~ v22\. ]]; then
             error "Wrong Node.js version! Expected 22.x but got $(node -v)"
             ((ISSUES_FOUND++))
@@ -688,7 +841,6 @@ verify_installation() {
         ((ISSUES_FOUND++))
     fi
     
-    # Check pnpm
     if command -v pnpm >/dev/null 2>&1; then
         log "pnpm: $(pnpm -v)"
     else
@@ -696,7 +848,6 @@ verify_installation() {
         ((ISSUES_FOUND++))
     fi
     
-    # Check PostgreSQL
     if command -v psql >/dev/null 2>&1; then
         log "PostgreSQL: $(psql --version)"
         if systemctl is-active --quiet postgresql; then
@@ -709,7 +860,17 @@ verify_installation() {
         ((ISSUES_FOUND++))
     fi
     
-    # Check project directory
+    if command -v nginx >/dev/null 2>&1; then
+        log "Nginx: $(nginx -v 2>&1)"
+        if systemctl is-active --quiet nginx; then
+            log "Nginx service is running"
+        else
+            warn "Nginx service NOT running"
+        fi
+    else
+        warn "Nginx NOT installed"
+    fi
+    
     if [[ -d "$PROJECT_PATH" ]]; then
         log "Project directory exists: $PROJECT_PATH"
         
@@ -743,7 +904,6 @@ verify_installation() {
         ((ISSUES_FOUND++))
     fi
     
-    # Check systemd service
     if [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
         log "Systemd service file exists"
         
@@ -765,6 +925,19 @@ verify_installation() {
         warn "Systemd service NOT configured"
     fi
     
+    # Check Nginx configs
+    if [[ -f "/etc/nginx/sites-available/snailycad-api" ]]; then
+        log "Nginx API config exists"
+    else
+        warn "Nginx API config NOT found"
+    fi
+    
+    if [[ -f "/etc/nginx/sites-available/snailycad-client" ]]; then
+        log "Nginx Client config exists"
+    else
+        warn "Nginx Client config NOT found"
+    fi
+    
     echo ""
     if [[ $ISSUES_FOUND -eq 0 ]]; then
         echo -e "${GREEN}✔ No critical issues found! System is ready.${NC}"
@@ -783,7 +956,6 @@ quick_install() {
     install_postgresql
     setup_database
     
-    # Prompt for project directory with default
     read -p "Enter project directory (default: $DEFAULT_PROJECT_PATH): " input_dir
     PROJECT_PATH="${input_dir:-$DEFAULT_PROJECT_PATH}"
     
@@ -793,6 +965,20 @@ quick_install() {
     build_project
     create_start_script
     setup_systemd
+    
+    # Ask if user wants nginx setup
+    echo ""
+    read -p "Do you want to setup Nginx reverse proxy now? (y/n): " SETUP_NGINX
+    if [[ "$SETUP_NGINX" == "y" ]]; then
+        install_nginx
+        configure_nginx
+        
+        echo ""
+        read -p "Do you want to setup SSL certificates now? (y/n): " SETUP_SSL
+        if [[ "$SETUP_SSL" == "y" ]]; then
+            setup_ssl
+        fi
+    fi
     
     echo ""
     echo "=============================================="
@@ -808,7 +994,19 @@ quick_install() {
     echo "  sudo systemctl restart ${SERVICE_NAME}.service"
     echo "  sudo systemctl status ${SERVICE_NAME}.service"
     echo "  tail -f $PROJECT_PATH/start.log"
+    echo "  sudo nginx -t  # Test nginx config"
+    echo "  sudo systemctl reload nginx"
     echo ""
+    
+    if [[ "$SETUP_NGINX" == "y" ]]; then
+        info "Your SnailyCAD is accessible at:"
+        echo "  Client: http://$CAD_DOMAIN"
+        echo "  API: http://$API_DOMAIN"
+        echo ""
+        if [[ "$SETUP_SSL" != "y" ]]; then
+            warn "Don't forget to setup SSL with: sudo certbot --nginx"
+        fi
+    fi
 }
 
 # =========================
@@ -864,19 +1062,16 @@ clean_install() {
         return
     fi
     
-    # Stop the service if running
     if systemctl is-active --quiet ${SERVICE_NAME}.service; then
         log "Stopping service..."
         sudo systemctl stop ${SERVICE_NAME}.service
     fi
     
-    # Remove project directory
     if [[ -d "$DEFAULT_PROJECT_PATH" ]]; then
         log "Removing project directory..."
         sudo rm -rf "$DEFAULT_PROJECT_PATH"
     fi
 
-    # Remove PostgreSQL database
     if command -v psql >/dev/null 2>&1; then
         read -p "Enter PostgreSQL database name to remove (or leave empty to skip): " DB_NAME
         if [[ -n "$DB_NAME" ]]; then
@@ -918,7 +1113,6 @@ database_only() {
 service_only() {
     section "SYSTEMD SERVICE SETUP"
     
-    # Prompt for project directory with default
     read -p "Enter project directory (default: $DEFAULT_PROJECT_PATH): " input_dir
     PROJECT_PATH="${input_dir:-$DEFAULT_PROJECT_PATH}"
     
@@ -934,10 +1128,61 @@ service_only() {
 }
 
 # =========================
+# NGINX SETUP ONLY
+# =========================
+nginx_only() {
+    section "NGINX CONFIGURATION"
+    
+    read -p "Enter project directory (default: $DEFAULT_PROJECT_PATH): " input_dir
+    PROJECT_PATH="${input_dir:-$DEFAULT_PROJECT_PATH}"
+    
+    if [[ ! -d "$PROJECT_PATH" ]]; then
+        error "Project directory not found: $PROJECT_PATH"
+        warn "Please run Quick Install first"
+        return
+    fi
+    
+    # Check if .env exists to get domains
+    if [[ -f "$PROJECT_PATH/.env" ]]; then
+        log "Reading domains from .env file..."
+        CAD_DOMAIN=$(grep "NEXT_PUBLIC_CLIENT_URL" "$PROJECT_PATH/.env" | cut -d'=' -f2 | tr -d '"' | sed 's|https://||' | sed 's|http://||')
+        API_DOMAIN=$(grep "NEXT_PUBLIC_PROD_ORIGIN" "$PROJECT_PATH/.env" | cut -d'=' -f2 | tr -d '"' | sed 's|https://||' | sed 's|http://||' | sed 's|/v1||')
+        
+        if [[ -n "$CAD_DOMAIN" ]] && [[ -n "$API_DOMAIN" ]]; then
+            log "Found domains:"
+            info "Client: $CAD_DOMAIN"
+            info "API: $API_DOMAIN"
+            read -p "Use these domains? (y/n): " USE_EXISTING
+            
+            if [[ "$USE_EXISTING" != "y" ]]; then
+                read -p "Enter CAD domain (e.g., cad.example.com): " CAD_DOMAIN
+                read -p "Enter API domain (e.g., api.example.com): " API_DOMAIN
+            fi
+        else
+            read -p "Enter CAD domain (e.g., cad.example.com): " CAD_DOMAIN
+            read -p "Enter API domain (e.g., api.example.com): " API_DOMAIN
+        fi
+    else
+        read -p "Enter CAD domain (e.g., cad.example.com): " CAD_DOMAIN
+        read -p "Enter API domain (e.g., api.example.com): " API_DOMAIN
+    fi
+    
+    export CAD_DOMAIN API_DOMAIN
+    
+    install_nginx
+    configure_nginx
+    
+    echo ""
+    read -p "Do you want to setup SSL certificates now? (y/n): " SETUP_SSL
+    if [[ "$SETUP_SSL" == "y" ]]; then
+        setup_ssl
+    fi
+}
+
+# =========================
 # MAIN PROGRAM
 # =========================
 main() {
-    # Check if running as root
     if [[ $EUID -ne 0 ]]; then
         error "This script must be run as root (use sudo)"
         exit 1
@@ -956,7 +1201,6 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             3)
-                # Set default project path for verification
                 PROJECT_PATH="$DEFAULT_PROJECT_PATH"
                 verify_installation
                 read -p "Press Enter to continue..."
@@ -978,16 +1222,23 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             8)
+                nginx_only
+                read -p "Press Enter to continue..."
+                ;;
+            9)
+                setup_ssl
+                read -p "Press Enter to continue..."
+                ;;
+            10)
                 log "Goodbye!"
                 exit 0
                 ;;
             *)
-                warn "Invalid choice. Please enter a number between 1-8."
+                warn "Invalid choice. Please enter a number between 1-10."
                 read -p "Press Enter to continue..."
                 ;;
         esac
     done
 }
 
-# Run the main function
 main "$@"

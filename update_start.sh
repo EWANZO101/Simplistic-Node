@@ -31,6 +31,124 @@ REPO_URL="https://github.com/SnailyCAD/snaily-cadv4.git"
 SERVICE_NAME="start-snaily-cadv4"
 
 # =========================
+# APT LOCK HANDLER
+# =========================
+wait_for_apt_lock() {
+    local max_wait=300  # Maximum 5 minutes
+    local waited=0
+    local check_interval=2
+    
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+          sudo fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+        
+        if [ $waited -ge $max_wait ]; then
+            warn "apt lock timeout reached after ${max_wait}s"
+            return 1
+        fi
+        
+        if [ $waited -eq 0 ]; then
+            warn "Waiting for apt lock to be released..."
+        fi
+        
+        sleep $check_interval
+        waited=$((waited + check_interval))
+        
+        if [ $((waited % 10)) -eq 0 ]; then
+            info "Still waiting... (${waited}s elapsed)"
+        fi
+    done
+    
+    if [ $waited -gt 0 ]; then
+        log "apt lock released after ${waited}s"
+    fi
+    
+    return 0
+}
+
+force_clear_apt_locks() {
+    warn "Force clearing apt locks..."
+    
+    # Kill any hanging apt processes
+    sudo killall apt apt-get dpkg 2>/dev/null || true
+    sleep 2
+    
+    # Remove lock files
+    sudo rm -rf /var/lib/apt/lists/lock
+    sudo rm -rf /var/cache/apt/archives/lock
+    sudo rm -rf /var/lib/dpkg/lock*
+    
+    # Fix any interrupted dpkg operations
+    sudo dpkg --configure -a 2>/dev/null || true
+    
+    log "apt locks cleared"
+}
+
+safe_apt_install() {
+    local packages="$@"
+    local max_retries=3
+    local retry=0
+    
+    while [ $retry -lt $max_retries ]; do
+        # Wait for lock to be released
+        if wait_for_apt_lock; then
+            # Try installation
+            if sudo apt install -y $packages; then
+                return 0
+            fi
+        fi
+        
+        retry=$((retry + 1))
+        
+        if [ $retry -lt $max_retries ]; then
+            warn "apt install failed (attempt $retry/$max_retries)"
+            
+            # On second retry, force clear locks
+            if [ $retry -eq 2 ]; then
+                force_clear_apt_locks
+            fi
+            
+            sleep 5
+        fi
+    done
+    
+    error "Failed to install packages after $max_retries attempts"
+    return 1
+}
+
+safe_apt_update() {
+    local max_retries=3
+    local retry=0
+    
+    while [ $retry -lt $max_retries ]; do
+        # Wait for lock to be released
+        if wait_for_apt_lock; then
+            # Try update
+            if sudo apt update; then
+                return 0
+            fi
+        fi
+        
+        retry=$((retry + 1))
+        
+        if [ $retry -lt $max_retries ]; then
+            warn "apt update failed (attempt $retry/$max_retries)"
+            
+            # On second retry, force clear locks
+            if [ $retry -eq 2 ]; then
+                force_clear_apt_locks
+            fi
+            
+            sleep 5
+        fi
+    done
+    
+    error "Failed to update packages after $max_retries attempts"
+    return 1
+}
+
+# =========================
 # NODE.JS INSTALLATION FUNCTIONS
 # =========================
 install_nodejs_22() {
@@ -50,9 +168,9 @@ install_nodejs_22() {
     sudo apt clean
     
     # Install Node.js 22.x
-    sudo apt update
+    safe_apt_update
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    sudo apt install -y nodejs
+    safe_apt_install nodejs
     
     # Verify installation
     log "Node.js version: $(node -v)"
@@ -90,12 +208,12 @@ fix_nodejs_conflict() {
     sudo apt clean
     
     # Update package lists
-    sudo apt update
+    safe_apt_update
     
     # Install fresh Node.js 22.x
     log "Installing Node.js 22.x..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    sudo apt install -y nodejs
+    safe_apt_install nodejs
     
     # Update npm to latest
     sudo npm install -g npm@latest
@@ -114,14 +232,11 @@ self_fix() {
     warn "Attempting self-repair for: $1"
     case "$1" in
         "apt-lock")
-            sudo rm -rf /var/lib/apt/lists/lock
-            sudo rm -rf /var/cache/apt/archives/lock
-            sudo rm -rf /var/lib/dpkg/lock*
-            sudo dpkg --configure -a
+            force_clear_apt_locks
             ;;
         "update-failed")
             sudo apt clean
-            sudo apt update -y || true
+            safe_apt_update || true
             ;;
         "node-missing")
             install_nodejs_22
@@ -137,8 +252,8 @@ self_fix() {
             sudo npm install -g pnpm@latest || curl -fsSL https://get.pnpm.io/install.sh | sh -
             ;;
         "postgres-missing")
-            sudo apt update -y
-            sudo apt install -y postgresql-16 postgresql-contrib
+            safe_apt_update
+            safe_apt_install postgresql-16 postgresql-contrib
             ;;
         *)
             warn "No fix method for $1"
@@ -177,12 +292,15 @@ install_prerequisites() {
     step "1" "Installing System Prerequisites"
     
     log "Updating package lists..."
-    if ! sudo apt update && sudo apt upgrade -y; then
+    if ! safe_apt_update; then
         self_fix "update-failed"
     fi
     
+    log "Upgrading existing packages..."
+    safe_apt_install upgrade || warn "Upgrade had issues, continuing..."
+    
     log "Installing base packages..."
-    sudo apt install -y git curl wget gnupg lsb-release software-properties-common pwgen
+    safe_apt_install git curl wget gnupg lsb-release software-properties-common pwgen
     
     # Check current Node.js status
     if command -v node >/dev/null 2>&1; then
@@ -234,12 +352,12 @@ install_postgresql() {
         return
     fi
     
-    sudo apt install -y wget gnupg lsb-release
+    safe_apt_install wget gnupg lsb-release
     RELEASE=$(lsb_release -cs)
     echo "deb http://apt.postgresql.org/pub/repos/apt ${RELEASE}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
     wget -qO - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
-    sudo apt update -y
-    sudo apt install -y postgresql-16 postgresql-contrib
+    safe_apt_update
+    safe_apt_install postgresql-16 postgresql-contrib
     
     sudo systemctl enable postgresql
     sudo systemctl start postgresql
@@ -734,7 +852,6 @@ update_deploy() {
 
 # =========================
 # CLEAN INSTALL
-# =========================
 # =========================
 clean_install() {
     section "CLEAN INSTALL - Remove & Reinstall"

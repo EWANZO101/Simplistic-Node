@@ -1,7 +1,7 @@
 #!/bin/bash
 ################################################################################
 # SnailyCADv4 Professional Deployment Script
-# Version: 2.0
+# Version: 2.0.1 - FIXED .env handling
 # Description: Automated deployment with validation, backup, and rollback
 ################################################################################
 
@@ -11,7 +11,7 @@ IFS=$'\n\t'
 # ------------------------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------------------------
-readonly SCRIPT_VERSION="2.0"
+readonly SCRIPT_VERSION="2.0.1"
 readonly PROJECT_DIR="${PROJECT_DIR:-/home/snaily-cadv4}"
 readonly ENV_FILE="${PROJECT_DIR}/.env"
 readonly SERVICE_NAME="start-snaily-cadv4.service"
@@ -79,7 +79,7 @@ print_banner() {
 ╔═══════════════════════════════════════════════════════════════╗
 ║                                                               ║
 ║           SnailyCADv4 Professional Deployment Tool            ║
-║                        Version 2.0                            ║
+║                        Version 2.0.1                          ║
 ║                                                               ║
 ╚═══════════════════════════════════════════════════════════════╝
 EOF
@@ -273,12 +273,22 @@ prompt_env_variable() {
     echo ""
     echo -e "${CYAN}${BOLD}${name}${NC}"
     echo -e "${YELLOW}Paste the raw value (no quotes - they will be added automatically)${NC}"
-    echo -ne "Enter value [current: ${current:-none}] (press Enter to keep current): "
+    
+    # Display current value more clearly
+    if [ -n "${current}" ]; then
+        echo -e "Current value: ${GREEN}${current:0:10}...${current: -4}${NC} (${#current} characters)"
+    else
+        echo -e "Current value: ${RED}(not set)${NC}"
+    fi
+    
+    echo -ne "Enter new value (or press Enter to keep current): "
     read -r result
     
+    # If user just pressed Enter, keep the current value
     if [ -z "${result}" ]; then
         echo "${current}"
     else
+        # Validate and return the new value
         validate_env_value "${name}" "${result}"
     fi
 }
@@ -289,20 +299,25 @@ configure_environment() {
     touch "${ENV_FILE}"
     chmod 600 "${ENV_FILE}"  # Secure the env file
     
-    # Load existing values
+    # Load existing values - handle both quoted and unquoted formats
     local BOT="" SERVER="" CLIENT="" SECRET="" STEAM=""
     
-    if [ -f "${ENV_FILE}" ]; then
-        BOT=$(grep '^DISCORD_BOT_TOKEN=' "${ENV_FILE}" 2>/dev/null | cut -d '"' -f2 || echo "")
-        SERVER=$(grep '^DISCORD_SERVER_ID=' "${ENV_FILE}" 2>/dev/null | cut -d '"' -f2 || echo "")
-        CLIENT=$(grep '^DISCORD_CLIENT_ID=' "${ENV_FILE}" 2>/dev/null | cut -d '"' -f2 || echo "")
-        SECRET=$(grep '^DISCORD_CLIENT_SECRET=' "${ENV_FILE}" 2>/dev/null | cut -d '"' -f2 || echo "")
-        STEAM=$(grep '^STEAM_API_KEY=' "${ENV_FILE}" 2>/dev/null | cut -d '"' -f2 || echo "")
+    if [ -f "${ENV_FILE}" ] && [ -s "${ENV_FILE}" ]; then
+        info "Loading existing environment values..."
+        
+        # Read values, handling quotes properly
+        BOT=$(grep '^DISCORD_BOT_TOKEN=' "${ENV_FILE}" 2>/dev/null | sed 's/^DISCORD_BOT_TOKEN=//' | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/" || echo "")
+        SERVER=$(grep '^DISCORD_SERVER_ID=' "${ENV_FILE}" 2>/dev/null | sed 's/^DISCORD_SERVER_ID=//' | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/" || echo "")
+        CLIENT=$(grep '^DISCORD_CLIENT_ID=' "${ENV_FILE}" 2>/dev/null | sed 's/^DISCORD_CLIENT_ID=//' | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/" || echo "")
+        SECRET=$(grep '^DISCORD_CLIENT_SECRET=' "${ENV_FILE}" 2>/dev/null | sed 's/^DISCORD_CLIENT_SECRET=//' | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/" || echo "")
+        STEAM=$(grep '^STEAM_API_KEY=' "${ENV_FILE}" 2>/dev/null | sed 's/^STEAM_API_KEY=//' | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/" || echo "")
     fi
     
     echo -e "\n${BOLD}Environment Configuration${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${YELLOW}Enter your credentials. Press Enter to keep existing values.${NC}"
     
+    # Prompt for each variable and capture the return value properly
     BOT=$(prompt_env_variable "DISCORD_BOT_TOKEN" "${BOT}")
     SERVER=$(prompt_env_variable "DISCORD_SERVER_ID" "${SERVER}")
     CLIENT=$(prompt_env_variable "DISCORD_CLIENT_ID" "${CLIENT}")
@@ -310,25 +325,105 @@ configure_environment() {
     STEAM=$(prompt_env_variable "STEAM_API_KEY" "${STEAM}")
     
     # Write environment file with proper formatting
-    cat > "${ENV_FILE}" << EOF
-DISCORD_BOT_TOKEN="${BOT}"
-DISCORD_SERVER_ID="${SERVER}"
-
-DISCORD_CLIENT_ID="${CLIENT}"
-DISCORD_CLIENT_SECRET="${SECRET}"
-
-STEAM_API_KEY="${STEAM}"
-EOF
+    log "Writing configuration to ${ENV_FILE}..."
+    
+    {
+        echo "# SnailyCAD Environment Configuration"
+        echo "# Generated: $(date)"
+        echo ""
+        echo "# Discord Bot Configuration"
+        if [ -n "${BOT}" ]; then
+            echo "DISCORD_BOT_TOKEN=\"${BOT}\""
+        else
+            echo "DISCORD_BOT_TOKEN=\"\""
+        fi
+        
+        if [ -n "${SERVER}" ]; then
+            echo "DISCORD_SERVER_ID=\"${SERVER}\""
+        else
+            echo "DISCORD_SERVER_ID=\"\""
+        fi
+        
+        echo ""
+        echo "# Discord OAuth Configuration"
+        
+        if [ -n "${CLIENT}" ]; then
+            echo "DISCORD_CLIENT_ID=\"${CLIENT}\""
+        else
+            echo "DISCORD_CLIENT_ID=\"\""
+        fi
+        
+        if [ -n "${SECRET}" ]; then
+            echo "DISCORD_CLIENT_SECRET=\"${SECRET}\""
+        else
+            echo "DISCORD_CLIENT_SECRET=\"\""
+        fi
+        
+        echo ""
+        echo "# Steam API Configuration"
+        
+        if [ -n "${STEAM}" ]; then
+            echo "STEAM_API_KEY=\"${STEAM}\""
+        else
+            echo "STEAM_API_KEY=\"\""
+        fi
+    } > "${ENV_FILE}"
     
     chmod 600 "${ENV_FILE}"
     success "Environment file updated: ${ENV_FILE}"
     
-    # Manual review
-    if confirm_action "Would you like to manually review the .env file in nano?"; then
+    # Show what was written (with values masked for security)
+    echo -e "\n${BOLD}Configuration Summary:${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    if [ -n "${BOT}" ]; then
+        echo -e "  ${CYAN}DISCORD_BOT_TOKEN:${NC}       ${GREEN}SET${NC} (${#BOT} chars) ...${BOT: -4}"
+    else
+        echo -e "  ${CYAN}DISCORD_BOT_TOKEN:${NC}       ${RED}EMPTY${NC}"
+    fi
+    
+    if [ -n "${SERVER}" ]; then
+        echo -e "  ${CYAN}DISCORD_SERVER_ID:${NC}      ${GREEN}SET${NC} (${SERVER})"
+    else
+        echo -e "  ${CYAN}DISCORD_SERVER_ID:${NC}      ${RED}EMPTY${NC}"
+    fi
+    
+    if [ -n "${CLIENT}" ]; then
+        echo -e "  ${CYAN}DISCORD_CLIENT_ID:${NC}      ${GREEN}SET${NC} (${CLIENT})"
+    else
+        echo -e "  ${CYAN}DISCORD_CLIENT_ID:${NC}      ${RED}EMPTY${NC}"
+    fi
+    
+    if [ -n "${SECRET}" ]; then
+        echo -e "  ${CYAN}DISCORD_CLIENT_SECRET:${NC}  ${GREEN}SET${NC} (${#SECRET} chars) ...${SECRET: -4}"
+    else
+        echo -e "  ${CYAN}DISCORD_CLIENT_SECRET:${NC}  ${RED}EMPTY${NC}"
+    fi
+    
+    if [ -n "${STEAM}" ]; then
+        echo -e "  ${CYAN}STEAM_API_KEY:${NC}          ${GREEN}SET${NC} (${#STEAM} chars) ...${STEAM: -4}"
+    else
+        echo -e "  ${CYAN}STEAM_API_KEY:${NC}          ${RED}EMPTY${NC}"
+    fi
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Verify the file was written correctly
+    if [ -f "${ENV_FILE}" ] && [ -s "${ENV_FILE}" ]; then
+        local line_count=$(wc -l < "${ENV_FILE}")
+        success "Verified: .env file contains ${line_count} lines"
+    else
+        error "Warning: .env file appears to be empty or missing!"
+    fi
+    
+    # Manual review option
+    echo ""
+    if confirm_action "Would you like to manually review/edit the .env file in nano?"; then
         warn "Opening .env in nano for review..."
-        echo -e "${YELLOW}Press CTRL+S to save, then CTRL+X to exit${NC}"
+        echo -e "${YELLOW}Press CTRL+O then Enter to save, CTRL+X to exit${NC}"
         sleep 2
         nano "${ENV_FILE}"
+        success "Manual review completed"
     fi
 }
 
@@ -611,6 +706,10 @@ print_deployment_summary() {
     echo -e "  ${CYAN}Restart:${NC}        sudo systemctl restart ${SERVICE_NAME}"
     echo -e "  ${CYAN}Stop:${NC}           sudo systemctl stop ${SERVICE_NAME}"
     echo ""
+    echo -e "${BOLD}Configuration:${NC}"
+    echo -e "  ${CYAN}Env file:${NC}       ${ENV_FILE}"
+    echo -e "  ${CYAN}Edit config:${NC}    nano ${ENV_FILE}"
+    echo ""
     echo -e "${BOLD}Log file:${NC} ${LOG_FILE}"
     echo -e "${BOLD}Backups:${NC}  ${BACKUP_DIR}"
     echo ""
@@ -640,6 +739,16 @@ main() {
         configure_environment
     else
         info "Skipping environment configuration"
+        
+        # Verify .env exists if skipping configuration
+        if [ ! -f "${ENV_FILE}" ] || [ ! -s "${ENV_FILE}" ]; then
+            warn ".env file is missing or empty!"
+            if confirm_action "Would you like to configure it now?"; then
+                configure_environment
+            else
+                error "Deployment may fail without proper environment configuration"
+            fi
+        fi
     fi
     
     # Deploy application

@@ -109,7 +109,8 @@ Use the deployment script below to set up Discord-related configuration:
 
 ---
 
-### 📥 **Install & Run Deployment Script**
+### 📥 **Install & Run Deployment Script**  if u need help with this script use - [![qwick guild](image_url)]([https://github.com/EWANZO101/Simplistic-Node/blob/main/qwick.md](https://github.com/EWANZO101/Simplistic-Node/blob/main/qwick.md))
+
 
 ```bash
 wget https://raw.githubusercontent.com/EWANZO101/Simplistic-Node/main/deploy-snailycad.sh

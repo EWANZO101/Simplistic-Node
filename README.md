@@ -67,3 +67,15 @@ cat /home/snaily-cadv4/start.log
 
 # Monitor the log file in real-time
 tail -f /home/snaily-cadv4/start.log
+
+
+
+
+
+########################
+discord Id stuff setup 
+
+
+cd /home/snaily-cadv4
+wget https://your-server.com/deploy-snailycad.sh
+chmod +x deploy-snailycad.sh

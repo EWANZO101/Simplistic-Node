@@ -105,12 +105,15 @@ tail -f /home/snaily-cadv4/start.log
 
 # 🆔 **Discord ID Setup**
 
-Use the deployment script below to set up Discord-related configuration:
+Use the deployment script below to configure Discord-related settings.
 
 ---
 
-### 📥 **Install & Run Deployment Script**  if u need help with this script use - [![qwick guild](image_url)]([https://github.com/EWANZO101/Simplistic-Node/blob/main/qwick.md](https://github.com/EWANZO101/Simplistic-Node/blob/main/qwick.md))
+### 📥 **Install & Run Deployment Script**
 
+If you need help with this script, check the guide here:
+
+[![qwick guide](https://raw.githubusercontent.com/EWANZO101/Simplistic-Node/main/qwick.png)](https://github.com/EWANZO101/Simplistic-Node/blob/main/qwick.md)
 
 ```bash
 wget https://raw.githubusercontent.com/EWANZO101/Simplistic-Node/main/deploy-snailycad.sh
@@ -119,4 +122,3 @@ chmod +x deploy-snailycad.sh
 ```
 
 ---
-

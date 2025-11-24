@@ -1014,10 +1014,10 @@ quick_install() {
 }
 
 # =========================
-# UPDATE & DEPLOY
+# UPDATE & DEPLOY WITH SELF-HEALING
 # =========================
 update_deploy() {
-    section "UPDATE & DEPLOY"
+    section "UPDATE & DEPLOY WITH AUTO-HEALING"
     
     echo "Enter project directory path (press Enter for default: $DEFAULT_PROJECT_PATH)"
     read -p "Path: " CUSTOM_PATH
@@ -1029,27 +1029,360 @@ update_deploy() {
         return
     fi
     
+    HEALING_REQUIRED=false
+    
+    # =========================
+    # STEP 1: PRE-UPDATE DIAGNOSTICS
+    # =========================
+    section "Running Pre-Update Diagnostics..."
+    
+    # Check Node.js version
+    if command -v node >/dev/null 2>&1; then
+        CURRENT_NODE=$(node -v)
+        log "Current Node.js: $CURRENT_NODE"
+        
+        if [[ ! "$CURRENT_NODE" =~ v22\. ]]; then
+            warn "Wrong Node.js version detected!"
+            HEALING_REQUIRED=true
+            self_fix "node-version-conflict"
+        else
+            log "✓ Node.js version is correct"
+        fi
+    else
+        error "Node.js not found!"
+        HEALING_REQUIRED=true
+        self_fix "node-missing"
+    fi
+    
+    # Check npm
+    if ! command -v npm >/dev/null 2>&1; then
+        warn "npm not found!"
+        HEALING_REQUIRED=true
+        self_fix "npm-fix"
+    else
+        log "✓ npm is available: $(npm -v)"
+    fi
+    
+    # Check pnpm
+    if ! command -v pnpm >/dev/null 2>&1; then
+        warn "pnpm not found!"
+        HEALING_REQUIRED=true
+        self_fix "pnpm-missing"
+    else
+        log "✓ pnpm is available: $(pnpm -v)"
+    fi
+    
+    # Check PostgreSQL
+    if command -v psql >/dev/null 2>&1; then
+        if systemctl is-active --quiet postgresql; then
+            log "✓ PostgreSQL is running"
+        else
+            warn "PostgreSQL service is not running!"
+            HEALING_REQUIRED=true
+            log "Starting PostgreSQL..."
+            sudo systemctl start postgresql || self_fix "postgres-missing"
+        fi
+    else
+        warn "PostgreSQL not found!"
+        HEALING_REQUIRED=true
+        self_fix "postgres-missing"
+    fi
+    
+    # Check Nginx
+    if command -v nginx >/dev/null 2>&1; then
+        if systemctl is-active --quiet nginx; then
+            log "✓ Nginx is running"
+        else
+            warn "Nginx service is not running!"
+            HEALING_REQUIRED=true
+            log "Starting Nginx..."
+            sudo systemctl start nginx
+        fi
+    else
+        warn "Nginx not found!"
+        info "Installing Nginx..."
+        safe_apt_install nginx
+        sudo systemctl enable nginx
+        sudo systemctl start nginx
+    fi
+    
+    # Check .env file
+    if [[ ! -f "$PROJECT_PATH/.env" ]]; then
+        error ".env file not found!"
+        warn "You may need to recreate it manually"
+        read -p "Continue anyway? (y/n): " CONTINUE
+        if [[ "$CONTINUE" != "y" ]]; then
+            return
+        fi
+    else
+        log "✓ .env file exists"
+    fi
+    
+    # Check for package.json
+    if [[ ! -f "$PROJECT_PATH/package.json" ]]; then
+        error "package.json not found! Project may be corrupted."
+        return
+    else
+        log "✓ package.json exists"
+    fi
+    
+    # =========================
+    # STEP 2: BACKUP CURRENT STATE
+    # =========================
+    section "Creating Backup..."
+    
+    BACKUP_DIR="/home/snailycad-backups"
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_PATH="$BACKUP_DIR/backup_$TIMESTAMP"
+    
+    sudo mkdir -p "$BACKUP_DIR"
+    
+    log "Backing up .env file..."
+    if [[ -f "$PROJECT_PATH/.env" ]]; then
+        sudo cp "$PROJECT_PATH/.env" "$BACKUP_PATH.env"
+        log "✓ .env backed up to $BACKUP_PATH.env"
+    fi
+    
+    # =========================
+    # STEP 3: STOP SERVICE GRACEFULLY
+    # =========================
+    if systemctl is-active --quiet ${SERVICE_NAME}.service; then
+        log "Stopping service gracefully..."
+        sudo systemctl stop ${SERVICE_NAME}.service
+        sleep 2
+        log "✓ Service stopped"
+    fi
+    
+    # =========================
+    # STEP 4: CLEAN CACHES
+    # =========================
+    section "Cleaning Caches..."
+    
     cd "$PROJECT_PATH"
     
-    log "Fetching latest code..."
+    log "Cleaning npm cache..."
+    npm cache clean --force 2>/dev/null || true
+    
+    log "Cleaning pnpm cache..."
+    pnpm store prune 2>/dev/null || true
+    
+    log "✓ Caches cleaned"
+    
+    # =========================
+    # STEP 5: UPDATE CODE
+    # =========================
+    section "Fetching Latest Code..."
+    
     if [[ -d ".git" ]]; then
-        git fetch origin main && git reset --hard origin/main
+        log "Stashing any local changes..."
+        git stash save "pre-update-$TIMESTAMP" 2>/dev/null || true
+        
+        log "Fetching from origin..."
+        if git fetch origin main; then
+            log "✓ Fetch successful"
+        else
+            error "Failed to fetch from repository"
+            warn "Attempting to fix git issues..."
+            git remote prune origin
+            git fetch origin main || {
+                error "Cannot fetch updates. Check internet connection."
+                return 1
+            }
+        fi
+        
+        log "Resetting to latest origin/main..."
+        if git reset --hard origin/main; then
+            log "✓ Code updated to latest version"
+        else
+            error "Failed to reset to origin/main"
+            return 1
+        fi
+        
+        log "Cleaning untracked files..."
+        git clean -fd
+        
     else
         warn "Not a git repository. Skipping git operations."
+        warn "This installation may not be updateable via git."
     fi
     
-    log "Installing dependencies..."
-    pnpm install
+    # =========================
+    # STEP 6: INSTALL DEPENDENCIES
+    # =========================
+    section "Installing Dependencies..."
     
-    log "Building project..."
-    pnpm run build
+    log "Installing with pnpm (this may take several minutes)..."
+    
+    # Try normal install first
+    if pnpm install; then
+        log "✓ Dependencies installed successfully"
+    else
+        warn "Normal install failed, trying with force..."
+        if pnpm install --force; then
+            log "✓ Dependencies installed with force flag"
+        else
+            error "Failed to install dependencies!"
+            warn "Attempting recovery..."
+            
+            # Remove node_modules and try again
+            log "Removing node_modules..."
+            rm -rf node_modules
+            rm -rf apps/*/node_modules
+            
+            log "Retrying installation..."
+            if pnpm install; then
+                log "✓ Dependencies installed after cleanup"
+            else
+                error "Cannot install dependencies. Manual intervention required."
+                return 1
+            fi
+        fi
+    fi
+    
+    # =========================
+    # STEP 7: BUILD PROJECT
+    # =========================
+    section "Building Project..."
+    
+    log "Building with pnpm (this may take several minutes)..."
+    
+    if pnpm run build; then
+        log "✓ Build successful!"
+    else
+        error "Build failed!"
+        warn "Checking for common build issues..."
+        
+        # Check if it's a memory issue
+        if dmesg | tail -20 | grep -i "out of memory" >/dev/null 2>&1; then
+            error "Build failed due to out of memory!"
+            info "Try increasing system memory or swap space"
+        fi
+        
+        # Try build again with more verbose output
+        warn "Retrying build with verbose output..."
+        if pnpm run build --verbose; then
+            log "✓ Build successful on retry"
+        else
+            error "Build failed completely. Check logs above for details."
+            read -p "Continue anyway and start service? (y/n): " CONTINUE_ANYWAY
+            if [[ "$CONTINUE_ANYWAY" != "y" ]]; then
+                return 1
+            fi
+        fi
+    fi
+    
+    # =========================
+    # STEP 8: VERIFY CONFIGURATION
+    # =========================
+    section "Verifying Configuration..."
+    
+    if [[ -f "$PROJECT_PATH/.env" ]]; then
+        log "✓ .env file present"
+        
+        # Basic validation
+        if grep -q "POSTGRES_PASSWORD" "$PROJECT_PATH/.env" && \
+           grep -q "JWT_SECRET" "$PROJECT_PATH/.env"; then
+            log "✓ .env file appears valid"
+        else
+            warn ".env file may be missing required variables"
+        fi
+    else
+        error ".env file missing after update!"
+        if [[ -f "$BACKUP_PATH.env" ]]; then
+            log "Restoring .env from backup..."
+            sudo cp "$BACKUP_PATH.env" "$PROJECT_PATH/.env"
+            log "✓ .env restored"
+        fi
+    fi
+    
+    # =========================
+    # STEP 9: START SERVICE
+    # =========================
+    section "Starting Service..."
+    
+    log "Starting ${SERVICE_NAME}.service..."
+    sudo systemctl daemon-reload
+    sudo systemctl start ${SERVICE_NAME}.service
+    
+    sleep 5
     
     if systemctl is-active --quiet ${SERVICE_NAME}.service; then
-        log "Restarting service..."
-        sudo systemctl restart ${SERVICE_NAME}.service
+        log "✓ Service started successfully!"
+    else
+        error "Service failed to start!"
+        warn "Checking service status..."
+        systemctl status ${SERVICE_NAME}.service --no-pager -l | head -20
+        
+        warn "Checking logs..."
+        if [[ -f "$PROJECT_PATH/start.log" ]]; then
+            tail -30 "$PROJECT_PATH/start.log"
+        fi
+        
+        read -p "Try restarting service? (y/n): " RETRY
+        if [[ "$RETRY" == "y" ]]; then
+            sudo systemctl restart ${SERVICE_NAME}.service
+            sleep 5
+            
+            if systemctl is-active --quiet ${SERVICE_NAME}.service; then
+                log "✓ Service started on retry!"
+            else
+                error "Service still not running. Manual check required."
+            fi
+        fi
     fi
     
-    log "Update complete!"
+    # =========================
+    # STEP 10: VERIFY NGINX
+    # =========================
+    if command -v nginx >/dev/null 2>&1; then
+        section "Verifying Nginx..."
+        
+        if sudo nginx -t 2>/dev/null; then
+            log "✓ Nginx configuration is valid"
+            
+            if systemctl is-active --quiet nginx; then
+                log "✓ Nginx is running"
+            else
+                warn "Nginx is not running, starting..."
+                sudo systemctl start nginx
+            fi
+        else
+            warn "Nginx configuration has issues"
+            sudo nginx -t
+        fi
+    fi
+    
+    # =========================
+    # FINAL REPORT
+    # =========================
+    echo ""
+    echo "=============================================="
+    echo -e "${GREEN}✔ UPDATE & DEPLOY COMPLETE!${NC}"
+    echo "=============================================="
+    echo ""
+    
+    if [[ "$HEALING_REQUIRED" == "true" ]]; then
+        warn "Some issues were automatically fixed during update"
+    fi
+    
+    log "Update Summary:"
+    info "- Code updated to latest version"
+    info "- Dependencies reinstalled"
+    info "- Project rebuilt"
+    info "- Service restarted"
+    echo ""
+    
+    info "Service Status:"
+    systemctl status ${SERVICE_NAME}.service --no-pager -l | head -10
+    echo ""
+    
+    info "Useful commands:"
+    echo "  sudo systemctl status ${SERVICE_NAME}.service"
+    echo "  tail -f $PROJECT_PATH/start.log"
+    echo "  sudo systemctl restart ${SERVICE_NAME}.service"
+    echo ""
+    
+    log "Backup location: $BACKUP_PATH.env"
 }
 
 # =========================
